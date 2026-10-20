@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quiniela familiar</title>
+<meta name="theme-color" content="#E7EFE6">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Papel del boleto (verde pálido) y tinta roja de las casillas */
+  :root {
+    --papel: #E7EFE6;
+    --papel-2: #DCE7DB;
+    --tinta: #17352A;
+    --tinta-suave: #4F6A5E;
+    --rojo: #B3262F;
+    --rojo-suave: #F2D9DA;
+    --linea: #B9CBB9;
+    --ok: #1E7A46;
+    --blanco: #FBFDFB;
+    --radio: 6px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--papel); color: var(--tinta);
+    font: 400 16px/1.5 "Barlow", system-ui, sans-serif;
+    padding: 0 16px calc(96px + env(safe-area-inset-bottom));
+  }
+  main { max-width: 520px; margin: 0 auto; }
+
+  header { padding: 28px 0 16px; border-bottom: 2px solid var(--rojo); }
+  .marca { font: 600 15px/1 "Barlow Condensed", sans-serif; color: var(--rojo); letter-spacing: .02em; }
+  h1 {
+    margin: 6px 0 4px; font: 700 64px/0.9 "Barlow Condensed", sans-serif;
+    letter-spacing: -.01em;
+  }
+  .plazo { margin: 0; color: var(--tinta-suave); font-size: 15px; }
+  .plazo strong { color: var(--tinta); font-weight: 600; }
+
+  /* Quién la ha hecho ya */
+  .equipo { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0 4px; padding: 0; list-style: none; }
+  .equipo li {
+    font: 500 14px/1 "Barlow", sans-serif; padding: 7px 10px; border-radius: 99px;
+    border: 1px solid var(--linea); color: var(--tinta-suave); background: transparent;
+  }
+  .equipo li.hecha { border-color: var(--ok); color: var(--ok); }
+  .equipo li.hecha::before { content: "✓ "; }
+
+  /* Paso 1: quién eres */
+  section { margin-top: 24px; }
+  h2 { font: 600 22px/1.2 "Barlow Condensed", sans-serif; margin: 0 0 10px; }
+  .nombres { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+  .nombres button {
+    font: 600 18px/1 "Barlow Condensed", sans-serif; padding: 14px 10px;
+    border: 1.5px solid var(--tinta); background: var(--blanco); color: var(--tinta);
+    border-radius: var(--radio); cursor: pointer;
+  }
+  .nombres button[aria-pressed="true"] { background: var(--tinta); color: var(--papel); }
+  .pin { display: flex; gap: 8px; margin-top: 12px; }
+  .pin input {
+    flex: 1; min-width: 0; font: 600 22px/1 "Barlow Condensed", sans-serif; letter-spacing: .3em;
+    padding: 12px; border: 1.5px solid var(--tinta); border-radius: var(--radio); background: var(--blanco);
+    color: var(--tinta);
+  }
+  .pin input::placeholder { letter-spacing: normal; font-weight: 500; color: var(--tinta-suave); }
+  .btn {
+    font: 600 18px/1 "Barlow Condensed", sans-serif; padding: 14px 18px; border-radius: var(--radio);
+    border: 0; background: var(--rojo); color: #fff; cursor: pointer;
+  }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.sec { background: transparent; color: var(--tinta); border: 1.5px solid var(--tinta); }
+
+  /* Boleto */
+  .boleto { background: var(--blanco); border: 1.5px solid var(--rojo); border-radius: var(--radio); overflow: hidden; }
+  .fila {
+    display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px;
+    padding: 6px 8px 6px 6px; border-top: 1px solid var(--rojo-suave);
+  }
+  .fila:first-child { border-top: 0; }
+  .fila:nth-child(5n):not(:last-child) { border-bottom: 1.5px solid var(--rojo); }
+  .num { font: 700 16px/1 "Barlow Condensed", sans-serif; color: var(--rojo); text-align: center; }
+  .partido { font: 500 17px/1.15 "Barlow Condensed", sans-serif; min-width: 0; }
+  .partido span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .partido small { display: block; font: 400 12px/1.2 "Barlow", sans-serif; color: var(--tinta-suave); }
+  .signos { display: flex; gap: 4px; }
+  .casilla {
+    width: 40px; height: 40px; border: 1.5px solid var(--rojo); border-radius: 3px;
+    background: transparent; color: var(--rojo); font: 700 18px/1 "Barlow Condensed", sans-serif;
+    cursor: pointer; position: relative; padding: 0;
+  }
+  .casilla[aria-pressed="true"] { background: var(--rojo); color: #fff; }
+  .casilla:focus-visible, .nombres button:focus-visible, .btn:focus-visible, .pin input:focus-visible {
+    outline: 3px solid var(--tinta); outline-offset: 2px;
+  }
+  .casilla.acierto { box-shadow: inset 0 0 0 3px var(--ok); }
+  .casilla:disabled { cursor: default; }
+
+  .pleno { padding: 10px 8px 12px; border-top: 1.5px solid var(--rojo); background: var(--rojo-suave); }
+  .pleno .cab { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .pleno .cab .num { width: 26px; }
+  .pleno-eq { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 4px 0 4px 34px; }
+  .pleno-eq .signos .casilla { width: 36px; height: 36px; }
+  .nota { font-size: 14px; color: var(--tinta-suave); margin: 8px 0 0; }
+
+  /* Barra fija inferior */
+  .barra {
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: var(--papel); border-top: 1px solid var(--linea);
+  }
+  .barra .dentro { max-width: 520px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
+  .barra .cuenta { flex: 1; font: 600 18px/1.1 "Barlow Condensed", sans-serif; }
+  .barra .cuenta small { display: block; font: 400 13px/1.3 "Barlow", sans-serif; color: var(--tinta-suave); }
+
+  .aviso { margin: 16px 0 0; padding: 12px 14px; border-radius: var(--radio); background: var(--blanco); border-left: 4px solid var(--rojo); }
+  .aviso.ok { border-left-color: var(--ok); }
+  [hidden] { display: none !important; }
+
+  /* Tabla con todas las columnas (cuando ya se pueden ver) */
+  .todas { width: 100%; border-collapse: collapse; background: var(--blanco); font: 500 15px/1 "Barlow Condensed", sans-serif; }
+  .todas th, .todas td { border: 1px solid var(--rojo-suave); padding: 6px 4px; text-align: center; }
+  .todas th { color: var(--rojo); font-weight: 600; }
+  .todas td.eq { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
+  .todas td.si { color: var(--ok); font-weight: 700; }
+  .todas td.no { color: var(--rojo); text-decoration: line-through; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .casilla { transition: background-color .12s, color .12s; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="marca">Quiniela familiar</div>
+    <h1 id="titulo">Jornada …</h1>
+    <p class="plazo" id="plazo">Cargando la jornada…</p>
+    <ul class="equipo" id="equipo" aria-label="Quién la ha hecho"></ul>
+  </header>
+
+  <div id="error" class="aviso" role="alert" hidden></div>
+
+  <section id="paso-quien" hidden>
+    <h2>¿Quién eres?</h2>
+    <div class="nombres" id="nombres"></div>
+    <form class="pin" id="form-pin" hidden>
+      <label for="pin" class="sr" hidden>PIN</label>
+      <input id="pin" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="Tu PIN" aria-label="Tu PIN">
+      <button class="btn" type="submit">Entrar</button>
+    </form>
+  </section>
+
+  <section id="paso-boleto" hidden>
+    <h2 id="saludo"></h2>
+    <div class="boleto" id="boleto"></div>
+    <p class="nota" id="nota-pleno" hidden></p>
+    <div id="resultado" class="aviso" role="status" hidden></div>
+  </section>
+
+  <section id="paso-todas" hidden>
+    <h2>Columnas de la familia</h2>
+    <div style="overflow-x:auto"><table class="todas" id="todas"></table></div>
+  </section>
+</main>
+
+<div class="barra" id="barra" hidden>
+  <div class="dentro">
+    <div class="cuenta" id="cuenta">0 de 14<small>Marca un signo en cada partido</small></div>
+    <button class="btn" id="registrar" disabled>Registrar mi quiniela</button>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+const CFG = window.QUINIELA_CONFIG;
+const DEMO = new URLSearchParams(location.search).has("demo");
+const GOLES = ["0", "1", "2", "M"];
+
+const $ = (id) => document.getElementById(id);
+const estado = { datos: null, jugador: null, pin: "", signos: Array(14).fill(null), pleno: [null, null] };
+
+async function rpc(nombre, args = {}) {
+  if (DEMO) return demoRpc(nombre, args);
+  const r = await fetch(`${CFG.supabaseUrl}/rest/v1/rpc/${nombre}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: CFG.supabaseAnonKey,
+               Authorization: `Bearer ${CFG.supabaseAnonKey}` },
+    body: JSON.stringify(args),
+  });
+  if (!r.ok) throw new Error("No se ha podido conectar. Prueba de nuevo en un momento.");
+  return r.json();
+}
+
+const fmtFecha = (iso) => new Date(iso).toLocaleString("es-ES", {
+  weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
+  timeZone: "Europe/Madrid" });
+const fmtCorta = (iso) => iso ? new Date(iso).toLocaleString("es-ES", {
+  weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" }) : "";
+
+function mostrarError(msg) { const e = $("error"); e.textContent = msg; e.hidden = !msg; }
+
+async function cargar() {
+  try {
+    estado.datos = await rpc("estado_publico");
+  } catch (e) { mostrarError(e.message); return; }
+  const d = estado.datos;
+  if (!d.jornada) {
+    $("titulo").textContent = "Sin jornada";
+    $("plazo").textContent = "Todavía no se ha publicado la quiniela de esta semana. El bot avisará en el grupo cuando esté.";
+    return;
+  }
+  const j = d.jornada;
+  $("titulo").textContent = `Jornada ${j.numero}`;
+  $("plazo").innerHTML = j.abierta
+    ? `Puedes registrar y cambiar tu columna hasta el <strong>${fmtFecha(j.cierre)}</strong>.`
+    : `El plazo cerró el ${fmtFecha(j.cierre)}.`;
+
+  $("equipo").innerHTML = d.jugadores.map(p =>
+    `<li class="${p.hecha ? "hecha" : ""}">${p.nombre}</li>`).join("");
+
+  if (d.apuestas) pintarTodas();
+  if (!j.abierta) return;
+
+  $("paso-quien").hidden = false;
+  $("nombres").innerHTML = d.jugadores.map(p =>
+    `<button type="button" data-id="${p.id}" aria-pressed="false">${p.nombre}</button>`).join("");
+  $("nombres").onclick = (ev) => {
+    const b = ev.target.closest("button"); if (!b) return;
+    elegirJugador(Number(b.dataset.id));
+  };
+  const pre = Number(new URLSearchParams(location.search).get("j"));
+  if (pre) elegirJugador(pre);
+}
+
+function elegirJugador(id) {
+  estado.jugador = estado.datos.jugadores.find(p => p.id === id);
+  if (!estado.jugador) return;
+  document.querySelectorAll("#nombres button").forEach(b =>
+    b.setAttribute("aria-pressed", String(Number(b.dataset.id) === id)));
+  $("form-pin").hidden = false;
+  $("pin").focus();
+}
+
+$("form-pin").onsubmit = async (ev) => {
+  ev.preventDefault();
+  mostrarError("");
+  estado.pin = $("pin").value.trim();
+  const r = await rpc("mi_apuesta", { p_jugador: estado.jugador.id, p_pin: estado.pin }).catch(e => ({ error: e.message }));
+  if (r.error) { mostrarError(r.error); return; }
+  if (r.signos) estado.signos = r.signos.split("");
+  if (r.pleno) estado.pleno = r.pleno.split("-");
+  $("paso-quien").hidden = true;
+  pintarBoleto(!!r.signos);
+};
+
+function toca_pleno() { return estado.jugador && estado.datos.jornada.pleno_jugador_id === estado.jugador.id; }
+
+function pintarBoleto(yaTenia) {
+  const d = estado.datos;
+  $("saludo").textContent = yaTenia ? `${estado.jugador.nombre}, esta es tu columna` : `${estado.jugador.nombre}, marca tu columna`;
+  const filas = d.partidos.filter(p => p.posicion <= 14).map((p, i) => `
+    <div class="fila">
+      <div class="num">${p.posicion}</div>
+      <div class="partido"><span>${p.local}</span><span>${p.visitante}</span><small>${fmtCorta(p.inicio)}</small></div>
+      <div class="signos" role="group" aria-label="Partido ${p.posicion}">
+        ${["1","X","2"].map(s => `<button type="button" class="casilla" data-i="${i}" data-s="${s}"
+            aria-pressed="${estado.signos[i] === s}" aria-label="${s} en ${p.local} - ${p.visitante}">${s}</button>`).join("")}
+      </div>
+    </div>`).join("");
+
+  const p15 = d.partidos.find(p => p.posicion === 15);
+  const pleno = (toca_pleno() && p15) ? `
+    <div class="pleno">
+      <div class="cab"><div class="num">15</div><div class="partido"><span>Pleno al 15 · te toca a ti</span></div></div>
+      ${[p15.local, p15.visitante].map((eq, k) => `
+        <div class="pleno-eq">
+          <div class="partido"><span>${eq}</span></div>
+          <div class="signos" role="group" aria-label="Goles de ${eq}">
+            ${GOLES.map(g => `<button type="button" class="casilla" data-k="${k}" data-g="${g}"
+                aria-pressed="${estado.pleno[k] === g}" aria-label="${g} goles ${eq}">${g}</button>`).join("")}
+          </div>
+        </div>`).join("")}
+    </div>` : "";
+
+  $("boleto").innerHTML = filas + pleno;
+  const nombrePleno = d.jugadores.find(j => j.id === d.jornada.pleno_jugador_id)?.nombre;
+  $("nota-pleno").hidden = toca_pleno() || !nombrePleno;
+  $("nota-pleno").textContent = `El pleno al 15 de esta jornada lo rellena ${nombrePleno}.`;
+
+  $("boleto").onclick = (ev) => {
+    const b = ev.target.closest(".casilla"); if (!b) return;
+    if (b.dataset.s) estado.signos[Number(b.dataset.i)] = b.dataset.s;
+    else estado.pleno[Number(b.dataset.k)] = b.dataset.g;
+    b.parentElement.querySelectorAll(".casilla").forEach(c => c.setAttribute("aria-pressed", String(c === b)));
+    actualizarBarra();
+  };
+  $("paso-boleto").hidden = false;
+  $("barra").hidden = false;
+  actualizarBarra();
+}
+
+function actualizarBarra() {
+  const n = estado.signos.filter(Boolean).length;
+  const plenoOk = !toca_pleno() || (estado.pleno[0] && estado.pleno[1]);
+  const listo = n === 14 && plenoOk;
+  $("cuenta").innerHTML = `${n} de 14<small>${
+    n < 14 ? "Marca un signo en cada partido" : plenoOk ? "Lista para registrar" : "Falta el pleno al 15"}</small>`;
+  $("registrar").disabled = !listo;
+}
+
+$("registrar").onclick = async () => {
+  const btn = $("registrar");
+  btn.disabled = true; btn.textContent = "Registrando…";
+  const r = await rpc("registrar_apuesta", {
+    p_jugador: estado.jugador.id, p_pin: estado.pin, p_signos: estado.signos.join(""),
+    p_pleno: toca_pleno() ? estado.pleno.join("-") : null,
+  }).catch(e => ({ error: e.message }));
+  btn.textContent = "Registrar mi quiniela";
+  const res = $("resultado");
+  res.hidden = false;
+  if (r.error) { res.className = "aviso"; res.textContent = r.error; btn.disabled = false; return; }
+  res.className = "aviso ok";
+  res.textContent = `Quiniela registrada. Puedes cambiarla hasta el ${fmtFecha(estado.datos.jornada.cierre)}.`;
+  btn.disabled = false;
+  const yo = estado.datos.jugadores.find(j => j.id === estado.jugador.id); yo.hecha = true;
+  $("equipo").innerHTML = estado.datos.jugadores.map(p => `<li class="${p.hecha ? "hecha" : ""}">${p.nombre}</li>`).join("");
+};
+
+function pintarTodas() {
+  const d = estado.datos;
+  const jug = d.jugadores;
+  const ap = Object.fromEntries(d.apuestas.map(a => [a.jugador_id, a]));
+  let h = `<tr><th>#</th><th style="text-align:left">Partido</th>${jug.map(j => `<th>${j.nombre.split(" ")[0]}</th>`).join("")}<th>Res.</th></tr>`;
+  d.partidos.filter(p => p.posicion <= 14).forEach((p, i) => {
+    h += `<tr><td>${p.posicion}</td><td class="eq">${p.local} - ${p.visitante}</td>` +
+      jug.map(j => {
+        const s = ap[j.id]?.signos?.[i] ?? "–";
+        const cls = p.signo ? (s === p.signo ? "si" : "no") : "";
+        return `<td class="${cls}">${s}</td>`;
+      }).join("") + `<td>${p.signo ?? ""}</td></tr>`;
+  });
+  $("todas").innerHTML = h;
+  $("paso-todas").hidden = false;
+}
+
+/* ---- Modo demo (?demo) para ver la web sin base de datos ---- */
+function demoRpc(nombre) {
+  const eq = [["Athletic","Valencia"],["Real Madrid","Sevilla"],["Betis","Barcelona"],["Osasuna","Getafe"],
+    ["Villarreal","Alavés"],["Celta","Mallorca"],["Girona","Rayo"],["Atlético","Real Sociedad"],
+    ["Espanyol","Levante"],["Elche","Oviedo"],["Racing","Deportivo"],["Eibar","Zaragoza"],
+    ["Sporting","Málaga"],["Almería","Granada"],["Real Sociedad","Athletic"]];
+  const base = new Date(Date.now() + 3 * 864e5);
+  if (nombre === "estado_publico") return {
+    jornada: { id: 1, numero: 14, temporada: "2026-2027", primer_partido: base.toISOString(),
+      cierre: new Date(base - 864e5).toISOString(), pleno_jugador_id: 5, abierta: true },
+    partidos: eq.map((e, i) => ({ posicion: i + 1, local: e[0], visitante: e[1],
+      inicio: new Date(+base + (i % 3) * 864e5 / 3).toISOString() })),
+    jugadores: ["Luis Angel","Rosana","Joseba","Lara","Borja"].map((n, i) => ({ id: i + 1, nombre: n, hecha: i < 2 })),
+    apuestas: null };
+  if (nombre === "mi_apuesta") return { signos: null };
+  if (nombre === "registrar_apuesta") return { ok: true, jornada: 14 };
+}
+
+cargar();
+</script>
+</body>
+</html>
