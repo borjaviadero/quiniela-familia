@@ -65,6 +65,17 @@ El bot se ejecuta solo: de martes a jueves cada hora y de viernes a lunes cada
   (aplazado o suspendido), el parte de ese día se manda igual, indicando qué partido
   falta. El resultado final espera al signo oficial de Loterías.
 
+**Jornadas solapadas**
+- Si una jornada (por ejemplo, de Liga entre semana) se publica mientras otra sigue en
+  juego, el bot las lleva por separado: cada una tiene su anuncio, su plazo, sus
+  columnas, sus partes y su boleto. El anuncio de la nueva lo avisa:
+  *«Ojo: es una jornada entre semana y la jornada 16 sigue en juego. Son quinielas
+  distintas…»*. La web enseña siempre la que está abierta para apostar.
+- Ejemplo: si la del fin de semana acaba el lunes a las 23:00 y la siguiente empieza el
+  martes a las 18:00, el plazo de esta cierra el lunes a las 18:00. Su pleno se decide
+  con la última jornada terminada, y quién paga se sabe el lunes por la noche, al
+  acabar la del fin de semana (con tiempo para sellar el martes).
+
 **Premios**
 - Con el escrutinio oficial, el bot manda una línea por columna premiada:
   *«Borja ha tenido 11 aciertos por lo que corresponde 2,22 € según el sorteo.»*

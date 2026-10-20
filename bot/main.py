@@ -203,10 +203,26 @@ class Bot:
             lineas.append(f"El pleno al 15 lo rellena {mencion(self.jug[jo['pleno_jugador_id']])} ({motivo}).")
         if pagos := self.pagos_anterior(jo):
             lineas.append(texto_pago(pagos, self.jug, "abonarla") + ".")
+        if aviso := self.aviso_solapada(jo):
+            lineas.append(aviso)
         png = boleto(titulo=f"Jornada {jo['numero']}", subtitulo=f"Plazo: {fmt_fecha(cierre)}",
                      partidos=partidos, jugadores=[], apuestas={}, pleno_jugador_id=None,
                      mostrar_resultados=False)
         self.tg.foto(png, "\n".join(lineas), BOTON, WEB_URL)
+
+    def aviso_solapada(self, jo: dict) -> str | None:
+        """Si otra jornada anterior sigue en juego, se avisa de que son quinielas distintas."""
+        en_juego = [o for o in self.db.jornadas_abiertas()
+                    if o["id"] != jo["id"] and _dt(o["primer_partido"]) < _dt(jo["primer_partido"])]
+        if not en_juego:
+            return None
+        nums = [str(o["numero"]) for o in en_juego]
+        otras = (f"la jornada {nums[0]} sigue" if len(nums) == 1
+                 else f"las jornadas {lista_nombres(nums)} siguen")
+        entre_semana = _dt(jo["primer_partido"]).astimezone(MADRID).weekday() <= 3   # lunes a jueves
+        tipo = "una jornada entre semana" if entre_semana else "otra jornada"
+        return (f"⚠️ Ojo: es {tipo} y {otras} en juego. Son quinielas distintas: "
+                f"esta tiene su propio plazo, sus propias columnas y su propio boleto.")
 
     def publicar_apuestas(self, jo: dict, apuestas: dict, faltan: list[dict]):
         partidos = self.db.partidos(jo["id"])
