@@ -21,10 +21,11 @@ from decimal import Decimal
 
 from . import lae as lae_mod
 from .db import DB
+from . import equipos as equipos_mod
 from .imagen import boleto
 from .logica import (MADRID, dias_con_parte_pendiente, es_jornada_de_primera, eur, elegir_pleno,
                      jornada_completa,
-                     nombre_dia, pleno_acertado, quienes_pagan, ranking, _dt)
+                     nombre_dia, pleno_acertado, premios_columnas, quienes_pagan, ranking, _dt)
 from .telegram import Telegram, mencion
 
 WEB_URL = os.environ.get("WEB_URL", "")
@@ -75,21 +76,31 @@ class Bot:
             print("No hay jornadas abiertas.")
         for jo in abiertas:
             self.procesar(jo)
+        for jo in self.db.jornadas_sin_premios():
+            self.publicar_premios(jo)
 
     def buscar_jornadas_nuevas(self):
+        equipos = None
         for nueva in self.fuente.proximas_jornadas():
             if not nueva["numero"] or not nueva["primer_partido"]:
                 continue
             temporada = temporada_de(nueva["fecha_sorteo"] or nueva["primer_partido"])
             if self.db.jornada_existe(temporada, nueva["numero"]):
                 continue
-            if not es_jornada_de_primera(nueva["partidos"]):
+            if equipos is None:     # se descarga solo si hay alguna jornada nueva que mirar
+                equipos = self.equipos_primera()
+            if not es_jornada_de_primera(nueva["partidos"], equipos):
                 print(f"Jornada {nueva['numero']}: no es de Liga (Copa, Champions…); se omite.")
                 continue
             if nueva["primer_partido"] - timedelta(hours=24) <= self.ahora:
                 print(f"Jornada {nueva['numero']}: publicada demasiado tarde para apostar; se omite.")
                 continue
             self.crear_jornada(nueva, temporada)
+
+    def equipos_primera(self) -> list[str]:
+        lista = equipos_mod.de_espn()
+        print(f"Equipos de Primera: {'ESPN' if lista else 'lista de respaldo'}")
+        return lista
 
     def crear_jornada(self, nueva: dict, temporada: str) -> dict:
         # Pleno: el que más acertó en la jornada anterior. Si esa aún se está jugando
@@ -197,6 +208,7 @@ class Bot:
     # ------------------------------------------------------------------
     def seguir_resultados(self, jo: dict, apuestas: dict):
         nuevos = self.fuente.resultados(jo["id_sorteo_lae"], _fecha_iso(jo.get("fecha_sorteo")))
+        print(f"Jornada {jo['numero']}: {sum(1 for p in nuevos or [] if p['signo'])} de 15 resultados en Loterías")
         if nuevos:
             self.db.guardar_resultados(jo["id"], nuevos)
         partidos = self.db.partidos(jo["id"])
@@ -232,11 +244,12 @@ class Bot:
         orden = sorted(aciertos.items(), key=lambda x: -x[1])
         lineas = [f"🏁 <b>Jornada {jo['numero']} terminada</b>"]
         lineas += [f"{self.jug[j]['nombre']}: {a} aciertos" for j, a in orden]
-        p15 = next((p for p in partidos if p["posicion"] == 15), None)
         pj = jo["pleno_jugador_id"]
-        if pj and aciertos.get(pj) == 14 and p15 and \
-                pleno_acertado((apuestas.get(pj) or {}).get("pleno"), p15.get("goles_local"), p15.get("goles_visitante")):
-            lineas.append(f"🎉 ¡{self.jug[pj]['nombre']} ha hecho pleno al 15!")
+        pleno_ok = self.pleno_ok(jo, partidos, apuestas)
+        for j, a in orden:
+            if a == 14:
+                extra = " ¡y con el pleno al 15!" if pleno_ok else ""
+                lineas.append(f"🎉 ¡{self.jug[j]['nombre']} ha acertado los 14{extra}")
         lineas.append("")
         lineas.append(texto_pago(pagos, self.jug, "pagar la próxima quiniela") + ".")
 
@@ -245,6 +258,37 @@ class Bot:
                      pleno_jugador_id=pj, mostrar_resultados=True)
         self.tg.foto(png, "\n".join(lineas))
         self.db.actualizar_jornada(jo["id"], finalizada=True)
+
+    def pleno_ok(self, jo: dict, partidos: list[dict], apuestas: dict) -> bool:
+        """El pleno al 15 es uno por boleto (lo rellena quien toca) y vale para todas las columnas."""
+        p15 = next((p for p in partidos if p["posicion"] == 15), None)
+        pleno = (apuestas.get(jo["pleno_jugador_id"]) or {}).get("pleno")
+        return bool(p15 and pleno_acertado(pleno, p15.get("goles_local"), p15.get("goles_visitante")))
+
+    def publicar_premios(self, jo: dict):
+        """Cuando Loterías publica el escrutinio, dice qué columnas han cobrado y cuánto."""
+        escr = self.fuente.escrutinio(jo["id_sorteo_lae"], _fecha_iso(jo.get("fecha_sorteo")))
+        if not escr:
+            if self.ahora - _dt(jo["primer_partido"]) > timedelta(days=10):
+                self.db.actualizar_jornada(jo["id"], premios_publicados=True)   # no va a llegar
+            return
+        partidos = self.db.partidos(jo["id"])
+        apuestas = self.db.apuestas(jo["id"])
+        res = {p["posicion"]: p["signo"] for p in partidos if p["posicion"] <= 14}
+        aciertos = self.aciertos_completos(apuestas, res)
+        premios = premios_columnas(aciertos, self.pleno_ok(jo, partidos, apuestas), escr)
+        if premios:
+            lineas = [f"💰 <b>Premios de la jornada {jo['numero']}</b>"]
+            total = Decimal(0)
+            for j, conceptos in sorted(premios.items(), key=lambda x: -aciertos[x[0]]):
+                for concepto, imp in conceptos:
+                    lineas.append(f"{mencion(self.jug[j])} ha tenido {concepto} por lo que corresponde "
+                                  f"{eur(imp)} según el sorteo.")
+                    total += imp
+            if len(lineas) > 2:
+                lineas.append(f"\nEn total, {eur(total)} para el boleto.")
+            self.tg.mensaje("\n".join(lineas))
+        self.db.actualizar_jornada(jo["id"], premios_publicados=True)
 
     # ------------------------------------------------------------------
     def aciertos_completos(self, apuestas: dict, res: dict) -> dict[int, int]:
@@ -265,16 +309,23 @@ def _fecha_iso(v):
 
 def diagnostico_lae():
     """Muestra cómo interpreta el bot las próximas jornadas y los resultados de Loterías."""
+    eq = equipos_mod.de_espn()
+    print(f"=== Equipos de Primera según ESPN ({len(eq)} nombres) ===\n{eq}\n")
     print("=== Próximas jornadas (proximosv3) ===")
     print(json.dumps(lae_mod.proximos_crudo(), ensure_ascii=False))
     for j in lae_mod.proximas_jornadas():
         print(f"\n=== Jornada {j['numero']} · sorteo {j['id_sorteo']} · {j['fecha_sorteo']} ===")
         print(f"Primer partido: {j['primer_partido']}  ·  cierre oficial: {j['cierre_oficial']}")
         print(f"Plazo familiar (24 h antes): {j['primer_partido'] - timedelta(hours=24)}")
-        print(f"¿Es de Liga (Primera)?: {'sí' if es_jornada_de_primera(j['partidos']) else 'NO, se omite'}")
+        print(f"¿Es de Liga (Primera)?: {'sí' if es_jornada_de_primera(j['partidos'], eq or None) else 'NO, se omite'}")
         for p in lae_mod.resultados(j["id_sorteo"], j["fecha_sorteo"]) or j["partidos"]:
             res = f"{p['goles_local']}-{p['goles_visitante']} ({p['signo']})" if p["signo"] else ""
             print(f"  {p['posicion']:>2}. {p['inicio']:%a %d %H:%M}  {p['local']} - {p['visitante']}  {res}")
+    print("\n=== Escrutinio de las jornadas terminadas en los últimos 10 días ===")
+    hoy = datetime.now(MADRID).date()
+    for s_ in lae_mod._lista(lae_mod.celebrados_crudo(hoy - timedelta(days=10), hoy)):
+        print(f"Jornada {s_.get('numero')} ({s_.get('id_sorteo')}):",
+              lae_mod.escrutinio(s_["id_sorteo"], lae_mod._fecha(s_.get("fecha_sorteo")).date()))
     print("\n=== Ficha cruda de la primera jornada (fechav3) ===")
     pj = lae_mod.proximas_jornadas()
     if pj:

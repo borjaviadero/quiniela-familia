@@ -201,3 +201,31 @@ def resultados(id_sorteo: str, fecha_sorteo: date | None) -> list[dict] | None:
     if not candidatos:
         return None
     return max(candidatos, key=lambda ps: sum(1 for p in ps if p["signo"]))
+
+
+def _importe(txt) -> "Decimal":
+    from decimal import Decimal, InvalidOperation
+    s = str(txt or "0").strip().replace(".", "").replace(",", ".")
+    try:
+        return Decimal(s)
+    except InvalidOperation:
+        return Decimal(0)
+
+
+def escrutinio(id_sorteo: str, fecha_sorteo: date | None) -> dict | None:
+    """Premio por columna de cada categoría, del escrutinio oficial:
+    {"pleno": Decimal, 14: Decimal, 13: ..., 10: ...}. None si aún no está publicado."""
+    if not fecha_sorteo:
+        return None
+    for s in _lista(celebrados_crudo(fecha_sorteo - timedelta(days=7), fecha_sorteo + timedelta(days=3))):
+        if str(s.get("id_sorteo")) != str(id_sorteo) or not s.get("escrutinio"):
+            continue
+        premios = {}
+        for c in s["escrutinio"]:
+            tipo = str(c.get("tipo", "")).lower()
+            if "pleno" in tipo:
+                premios["pleno"] = _importe(c.get("premio"))
+            elif (m := re.search(r"(\d+)\s*acierto", tipo)):
+                premios[int(m.group(1))] = _importe(c.get("premio"))
+        return premios or None
+    return None

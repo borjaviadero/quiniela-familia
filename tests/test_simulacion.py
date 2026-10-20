@@ -59,6 +59,12 @@ class FakeFuente:
 
     con_jornada_15 = False
 
+    def escrutinio(self, id_sorteo, fecha):
+        if id_sorteo != "LAQU-14" or not self.jugados_hasta or self.jugados_hasta < datetime(2026, 10, 26, tzinfo=MADRID):
+            return None
+        return {"pleno": Decimal("80778.13"), 14: Decimal("11162.13"), 13: Decimal("165.26"),
+                12: Decimal("12.76"), 11: Decimal("2.22"), 10: Decimal("0"), 9: Decimal("0")}
+
     def partidos(self, id_sorteo, fecha):
         return next((j["partidos"] for j in self.proximas_jornadas() if j["id_sorteo"] == id_sorteo), None)
 
@@ -72,7 +78,7 @@ class FakeDB:
                    for i, n in enumerate(["Luis Angel", "Rosana", "Joseba", "Lara", "Borja"])]
         self.jornadas, self.parts, self.aps, self.partes, self.pag = [], {}, {}, set(), {}
         # Jornada 13 ya cerrada con el sistema antiguo: perdió Joseba; Lara y Borja empataron arriba
-        self.jornadas.append({"id": 13, "numero": 13, "finalizada": True,
+        self.jornadas.append({"id": 13, "numero": 13, "finalizada": True, "premios_publicados": True,
                               "primer_partido": SAB - timedelta(days=7)})
         self.parts[13] = [{"posicion": i + 1, "signo": "1"} for i in range(14)]
         self.aps[13] = {1: "1111111111XXXX", 2: "111111111XXXXX", 3: "11111XXXXXXXXX",
@@ -80,6 +86,8 @@ class FakeDB:
         self.pag[13] = [{"jugador_id": 3, "importe": Decimal("3.75")}]
 
     def jugadores(self): return deepcopy(self.js)
+    def jornadas_sin_premios(self):
+        return deepcopy([j for j in self.jornadas if j["finalizada"] and not j.get("premios_publicados")])
     def jornadas_abiertas(self):
         return deepcopy(sorted((j for j in self.jornadas if not j["finalizada"]),
                                key=lambda j: j["primer_partido"]))
@@ -99,7 +107,8 @@ class FakeDB:
     def pagos(self, jid): return deepcopy(self.pag.get(jid, []))
     def crear_jornada(self, jo, partidos):
         jo = {**jo, "id": jo["numero"], "created_at": self.ahora, "anunciada": False, "recordatorio_enviado": False,
-              "apuestas_publicadas": False, "finalizada": False}
+              "apuestas_publicadas": False, "finalizada": False,
+              "premios_publicados": False}
         self.jornadas.append(jo); self.parts[jo["id"]] = deepcopy(partidos)
         return deepcopy(jo)
     def actualizar_jornada(self, jid, **c):
@@ -111,6 +120,8 @@ class FakeDB:
 
 
 def main(salida: str):
+    import bot.equipos
+    bot.equipos.de_espn = lambda: []      # sin red: usa la lista de respaldo
     db, fuente = FakeDB(), FakeFuente()
     tg = Telegram(dry_run=salida)
     rng = random.Random(7)
@@ -130,6 +141,7 @@ def main(salida: str):
     tick(datetime(2026, 10, 22, 16, 0, tzinfo=MADRID), "otra pasada (no repite aviso)")
     db.aps[14][3] = "1X1X1X1X1X1X1X"
     db.aps[14][5] = "11211X1X1X1121"
+    db.aps[14][2] = "1X2111X1121X21"   # Rosana: 11 aciertos -> premio de 4ª categoría
     db.plenos[(14, jo["pleno_jugador_id"])] = "2-1"
     tick(datetime(2026, 10, 22, 20, 0, tzinfo=MADRID), "ya están las 5: se publican")
     fuente.jugados_hasta = datetime(2026, 10, 24, 19, 0, tzinfo=MADRID)

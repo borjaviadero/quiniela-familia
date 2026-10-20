@@ -14,9 +14,9 @@ PRECIO_BOLETO = Decimal("3.75")
 DURACION_PARTIDO = timedelta(hours=2)
 
 
-# Equipos de Primera División 2026-27 tal como los escribe Loterías (sin el "(m)").
-# Revisar al empezar cada temporada (ascensos y descensos). No hace falta que esté
-# completa: basta con que la mayoría de partidos de Liga se reconozcan.
+# Lista de RESPALDO de equipos de Primera 2026-27, por si ESPN no responde.
+# La lista buena se descarga sola cada vez (ver bot/equipos.py), así que los
+# ascensos y descensos se actualizan sin tocar nada.
 EQUIPOS_PRIMERA = {
     "Athletic Club", "At. Madrid", "Barcelona", "Betis", "Celta", "Deportivo", "Elche",
     "Espanyol", "Getafe", "Levante", "Osasuna", "Rayo Vallecano", "Real Madrid",
@@ -25,18 +25,14 @@ EQUIPOS_PRIMERA = {
 MIN_PARTIDOS_PRIMERA = 5
 
 
-def _norm(nombre: str) -> str:
-    import unicodedata
-    s = unicodedata.normalize("NFKD", nombre).encode("ascii", "ignore").decode().lower()
-    return " ".join(s.replace(".", ". ").split())
-
-
-def es_jornada_de_primera(partidos: list[dict]) -> bool:
+def es_jornada_de_primera(partidos: list[dict], equipos: list[str] | set[str] | None = None) -> bool:
     """La quiniela de Liga lleva varios partidos de Primera entre sí. Las de Champions,
     Copa, etc. tienen como mucho un equipo de Primera por partido."""
-    primera = {_norm(e) for e in EQUIPOS_PRIMERA}
+    from .equipos import coincide, palabras
+    lista = [palabras(e) for e in (equipos or EQUIPOS_PRIMERA)]
+    es_de_primera = lambda n: any(coincide(n, e) for e in lista)  # noqa: E731
     n = sum(1 for p in partidos if p["posicion"] <= 14
-            and _norm(p["local"]) in primera and _norm(p["visitante"]) in primera)
+            and es_de_primera(p["local"]) and es_de_primera(p["visitante"]))
     return n >= MIN_PARTIDOS_PRIMERA
 
 
@@ -138,3 +134,18 @@ def _dt(valor) -> datetime:
     if isinstance(valor, datetime):
         return valor
     return datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+
+
+def premios_columnas(aciertos: dict[int, int], pleno_ok: bool, escrutinio: dict) -> dict[int, list]:
+    """{jugador: [(concepto, importe), ...]} solo para columnas con premio.
+    El pleno al 15 es uno por boleto: vale para cualquier columna con 14 aciertos."""
+    out: dict[int, list] = {}
+    for j, a in aciertos.items():
+        lineas = []
+        if (imp := escrutinio.get(a)) and imp > 0:
+            lineas.append((f"{a} aciertos", imp))
+        if a == 14 and pleno_ok and (imp := escrutinio.get("pleno")) and imp > 0:
+            lineas.append(("pleno al 15", imp))
+        if lineas:
+            out[j] = lineas
+    return out

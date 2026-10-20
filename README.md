@@ -25,6 +25,15 @@ Joseba, Lara y Borja). Todo en servicios gratuitos:
 
 ### Reglas
 
+- Solo se juegan las quinielas **de Liga** (al menos 5 partidos entre equipos de Primera).
+  Las de Champions, Copa, etc. se ignoran. La lista de equipos de Primera se descarga
+  sola de ESPN, así que ascensos y descensos no hay que tocarlos; si ESPN fallara, se
+  usa la lista de respaldo de `bot/logica.py`.
+- Los equipos femeninos salen con **(F)** y nunca cuentan como de Primera.
+- Si alguna columna tiene premio, cuando Loterías publica el escrutinio el bot dice
+  cuánto le corresponde. El pleno al 15 es uno por boleto: vale para cualquier columna
+  con 14 aciertos.
+
 - Paga el boleto siguiente (3,75 €) quien menos aciertos saca. Si hay empate, se
   reparte; los céntimos que no cuadran se ajustan en el primero (1,87 € + 1,88 €).
 - El pleno al 15 lo rellena quien más acertó la jornada anterior. Si hay empate, o es
@@ -93,6 +102,11 @@ values ('2026-2027', 13, '2026-10-17 16:00+02', true);
 insert into pagos (jornada_id, jugador_id, importe)
 values ((select id from jornadas where numero = 13), 3, 3.75);
 ```
+
+## Migraciones de la base de datos
+
+Si la base de datos se creó con una versión anterior de `schema.sql`, ejecutar en
+Supabase > SQL Editor, en orden, los `supabase/migracion_*.sql` que falten.
 
 ## Desarrollo
 

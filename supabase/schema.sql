@@ -32,6 +32,7 @@ create table if not exists jornadas (
   recordatorio_enviado boolean not null default false,
   apuestas_publicadas  boolean not null default false,
   finalizada           boolean not null default false,
+  premios_publicados   boolean not null default false,
   created_at           timestamptz not null default now(),
   unique (temporada, numero)
 );

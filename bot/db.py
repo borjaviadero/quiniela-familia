@@ -42,6 +42,10 @@ class DB:
         r = self._req("GET", "jornadas", {"finalizada": "eq.true", "order": "primer_partido.desc", "limit": 1})
         return r[0] if r else None
 
+    def jornadas_sin_premios(self) -> list[dict]:
+        return self._req("GET", "jornadas", {"finalizada": "eq.true", "premios_publicados": "eq.false",
+                                             "order": "primer_partido.asc"})
+
     def jornada_existe(self, temporada: str, numero: int) -> bool:
         return bool(self._req("GET", "jornadas", {"temporada": f"eq.{temporada}", "numero": f"eq.{numero}",
                                                   "select": "id"}))
