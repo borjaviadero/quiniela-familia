@@ -123,6 +123,9 @@ class Bot:
         cierre = primer - timedelta(hours=24)
         aviso = primer - timedelta(hours=48)
 
+        if self.ahora < primer:
+            self.refrescar_partidos(jo)
+
         if not jo["anunciada"]:
             self.anunciar(jo, cierre)
             self.db.actualizar_jornada(jo["id"], anunciada=True)
@@ -148,6 +151,17 @@ class Bot:
 
         if self.ahora >= primer:
             self.seguir_resultados(jo, apuestas)
+
+    def refrescar_partidos(self, jo: dict):
+        """Antes de empezar, actualiza nombres y horarios por si Loterías los cambia."""
+        try:
+            ps = self.fuente.partidos(jo["id_sorteo_lae"], _fecha_iso(jo.get("fecha_sorteo")))
+        except Exception as e:  # noqa: BLE001
+            print(f"No se pudieron refrescar los partidos de la jornada {jo['numero']}: {e}")
+            return
+        if ps:
+            self.db.guardar_resultados(jo["id"], [{**p, "goles_local": None, "goles_visitante": None,
+                                                   "signo": None} for p in ps])
 
     def anunciar(self, jo: dict, cierre):
         partidos = self.db.partidos(jo["id"])

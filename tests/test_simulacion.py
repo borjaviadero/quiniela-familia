@@ -59,6 +59,9 @@ class FakeFuente:
 
     con_jornada_15 = False
 
+    def partidos(self, id_sorteo, fecha):
+        return next((j["partidos"] for j in self.proximas_jornadas() if j["id_sorteo"] == id_sorteo), None)
+
     def resultados(self, id_sorteo, fecha):
         return self._partidos() if id_sorteo == "LAQU-14" else None
 

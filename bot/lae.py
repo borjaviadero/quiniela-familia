@@ -93,8 +93,11 @@ def _fecha(valor, hora=None) -> datetime | None:
 
 
 def _nombre(valor) -> str:
-    """'Athletic Club (m)' -> 'Athletic Club'."""
-    return re.sub(r"\s*\((m|f)\)\s*$", "", str(valor or "")).strip()
+    """'Athletic Club (m)' -> 'Athletic Club' · 'Real Madrid (f)' -> 'Real Madrid (F)'."""
+    s = str(valor or "").strip()
+    if re.search(r"\(f\)\s*$", s, re.I):
+        return re.sub(r"\s*\(f\)\s*$", "", s, flags=re.I) + " (F)"
+    return re.sub(r"\s*\(m\)\s*$", "", s, flags=re.I)
 
 
 def _goles(txt: str) -> int | None:
