@@ -11,7 +11,12 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any
 
-import requests
+try:  # Se conecta "disfrazado" de Chrome: Loterías rechaza a los clientes que no parecen un navegador
+    from curl_cffi import requests as http
+    _IMPERSONAR = {"impersonate": "chrome"}
+except ImportError:  # pragma: no cover
+    import requests as http
+    _IMPERSONAR = {}
 
 from .logica import MADRID, signo_de_marcador
 
@@ -26,9 +31,18 @@ CABECERAS = {
 
 
 def _get(ruta: str, params: dict) -> Any:
-    r = requests.get(f"{BASE}/{ruta}", params=params, headers=CABECERAS, timeout=30)
+    r = http.get(f"{BASE}/{ruta}", params=params, headers=CABECERAS, timeout=30, **_IMPERSONAR)
     r.raise_for_status()
     return r.json()
+
+
+def probar(url: str) -> tuple[int | str, str]:
+    """Para el diagnóstico: devuelve (código HTTP, principio de la respuesta)."""
+    try:
+        r = http.get(url, headers=CABECERAS, timeout=30, **_IMPERSONAR)
+        return r.status_code, r.text[:1500]
+    except Exception as e:  # noqa: BLE001
+        return "ERROR", str(e)[:300]
 
 
 def proximos_crudo(num: int = 2) -> Any:
@@ -154,13 +168,13 @@ def resultados(id_sorteo: str, fecha_sorteo: date | None) -> list[dict] | None:
     candidatos = []
     try:
         candidatos += [_sorteo(x) for x in _lista(proximos_crudo())]
-    except requests.RequestException:
+    except Exception:  # noqa: BLE001
         pass
     if fecha_sorteo:
         try:
             candidatos += [_sorteo(x) for x in _lista(
                 celebrados_crudo(fecha_sorteo - timedelta(days=7), fecha_sorteo + timedelta(days=2)))]
-        except requests.RequestException:
+        except Exception:  # noqa: BLE001
             pass
     mejores = [s for s in candidatos if s and s["id_sorteo"] == str(id_sorteo)]
     if not mejores:

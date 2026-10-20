@@ -235,6 +235,42 @@ def _fecha_iso(v):
     return date.fromisoformat(v) if isinstance(v, str) else v
 
 
+def diagnostico_lae():
+    """Prueba varias direcciones de Loterías y vuelca lo que devuelven."""
+    from datetime import date as _date
+    base = "https://www.loteriasyapuestas.es"
+    hoy = datetime.now(MADRID).date()
+    f = lambda d: d.strftime("%Y%m%d")  # noqa: E731
+    urls = [f"{base}/servicios/proximosv3?game_id=LAQU&num=2"]
+    codigo, texto = lae_mod.probar(urls[0])
+    print(f"### {codigo}  {urls[0]}\n{texto}\n")
+    sorteos = []
+    try:
+        sorteos = json.loads(texto)
+    except Exception:  # noqa: BLE001
+        pass
+    for s in sorteos if isinstance(sorteos, list) else []:
+        ids, fecha = s.get("id_sorteo"), str(s.get("fecha", ""))[:10].replace("-", "")
+        urls += [
+            f"{base}/servicios/fechav3?game_id=LAQU&fecha_sorteo={fecha}",
+            f"{base}/servicios/buscadorSorteos?game_id=LAQU&celebrados=false&fechaInicioInclusiva={fecha}&fechaFinInclusiva={fecha}",
+            f"{base}/servicios/infoSorteo?id_sorteo={ids}",
+            f"{base}/servicios/sorteo?id_sorteo={ids}",
+            f"{base}/servicios/partidos?id_sorteo={ids}",
+            f"{base}/servicios/partidosQuiniela?id_sorteo={ids}",
+        ]
+    urls += [
+        f"{base}/servicios/buscadorSorteos?game_id=LAQU&celebrados=true"
+        f"&fechaInicioInclusiva={f(hoy - timedelta(days=10))}&fechaFinInclusiva={f(hoy)}",
+        f"{base}/es/la-quiniela",
+    ]
+    for u in urls[1:]:
+        codigo, texto = lae_mod.probar(u)
+        if u.endswith("/es/la-quiniela"):   # página HTML: solo enseñamos si menciona partidos
+            texto = f"(HTML, {len(texto)} car.) contiene 'partido': {'partido' in texto.lower()}"
+        print(f"### {codigo}  {u}\n{texto}\n")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="bot")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -247,11 +283,7 @@ def main(argv=None):
     if a.cmd == "tick":
         Bot(DB(), Telegram(dry_run=a.dry_run)).tick()
     elif a.cmd == "diagnostico-lae":
-        crudo = lae_mod.proximos_crudo()
-        print("=== proximosv3 (crudo, recortado) ===")
-        print(json.dumps(crudo, ensure_ascii=False, indent=1)[:6000])
-        print("\n=== Interpretación ===")
-        print(json.dumps(lae_mod.proxima_jornada(), ensure_ascii=False, indent=1, default=str))
+        diagnostico_lae()
     elif a.cmd == "telegram-ids":
         for u in Telegram().actualizaciones():
             m = u.get("message") or u.get("my_chat_member") or {}
