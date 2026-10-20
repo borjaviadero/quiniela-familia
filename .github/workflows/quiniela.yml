@@ -1,21 +1,21 @@
-name: Quiniela
+name: Bot
 
+# Tuesday-Thursday every hour, Friday-Monday every 20 minutes (times are UTC).
+# Can also be run by hand: Actions > Bot > Run workflow.
 on:
   schedule:
-    # Horas en UTC. Viernes a lunes cada 20 min (partidos y resultados);
-    # martes a jueves una vez por hora (publicación de la jornada y avisos).
     - cron: "7,27,47 * * * 5,6,0,1"
     - cron: "7 * * * 2,3,4"
   workflow_dispatch:
     inputs:
-      accion:
-        description: "Qué ejecutar"
+      command:
+        description: "Command to run"
         type: choice
-        options: [tick, diagnostico-lae, telegram-ids]
+        options: [tick, diagnose, telegram-ids]
         default: tick
 
 env:
-  # Las acciones de GitHub dejan de usar Node.js 20: se fuerza Node.js 24
+  # GitHub actions are moving off Node.js 20: force Node.js 24
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # solo para el commit de mantenimiento (ver último paso)
+  contents: write   # only for the keep-alive commit (last step)
 
 jobs:
   bot:
@@ -39,33 +39,33 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Fuentes Barlow Condensed para las imágenes
+      - name: Download Barlow Condensed fonts for the images
         run: |
-          mkdir -p bot/fuentes
+          mkdir -p bot/fonts
           for w in Bold SemiBold Medium; do
-            curl -fsSL -o bot/fuentes/BarlowCondensed-$w.ttf \
+            curl -fsSL -o bot/fonts/BarlowCondensed-$w.ttf \
               https://github.com/google/fonts/raw/main/ofl/barlowcondensed/BarlowCondensed-$w.ttf || true
           done
 
-      - name: Ejecutar
+      - name: Run
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WEB_URL: ${{ vars.WEB_URL }}
-        run: python -m bot.main ${{ inputs.accion || 'tick' }}
+        run: python -m bot.main ${{ inputs.command || 'tick' }}
 
-      # GitHub desactiva los cron de un repositorio sin commits en 60 días.
-      # Si el último commit tiene más de 50 días, se hace uno vacío.
-      - name: Mantener vivo el cron
+      # GitHub disables scheduled workflows after 60 days without commits. The weekly
+      # backup already commits; this is a safety net if the last commit is >50 days old.
+      - name: Keep the schedule alive
         if: github.event_name == 'schedule'
         run: |
-          ultimo=$(git log -1 --format=%ct)
-          if [ $(( $(date +%s) - ultimo )) -gt $(( 50 * 86400 )) ]; then
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt $(( 50 * 86400 )) ]; then
             git config user.name "quiniela-bot"
             git config user.email "quiniela-bot@users.noreply.github.com"
-            git commit --allow-empty -m "Mantenimiento: mantener activas las tareas programadas"
+            git commit --allow-empty -m "chore: keep scheduled workflows alive"
             git pull --rebase
             git push
           fi

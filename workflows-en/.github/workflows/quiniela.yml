@@ -1,0 +1,71 @@
+name: Bot
+
+# Tuesday-Thursday every hour, Friday-Monday every 20 minutes (times are UTC).
+# Can also be run by hand: Actions > Bot > Run workflow.
+on:
+  schedule:
+    - cron: "7,27,47 * * * 5,6,0,1"
+    - cron: "7 * * * 2,3,4"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Command to run"
+        type: choice
+        options: [tick, diagnose, telegram-ids]
+        default: tick
+
+env:
+  # GitHub actions are moving off Node.js 20: force Node.js 24
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: quiniela
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # only for the keep-alive commit (last step)
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Download Barlow Condensed fonts for the images
+        run: |
+          mkdir -p bot/fonts
+          for w in Bold SemiBold Medium; do
+            curl -fsSL -o bot/fonts/BarlowCondensed-$w.ttf \
+              https://github.com/google/fonts/raw/main/ofl/barlowcondensed/BarlowCondensed-$w.ttf || true
+          done
+
+      - name: Run
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WEB_URL: ${{ vars.WEB_URL }}
+        run: python -m bot.main ${{ inputs.command || 'tick' }}
+
+      # GitHub disables scheduled workflows after 60 days without commits. The weekly
+      # backup already commits; this is a safety net if the last commit is >50 days old.
+      - name: Keep the schedule alive
+        if: github.event_name == 'schedule'
+        run: |
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt $(( 50 * 86400 )) ]; then
+            git config user.name "quiniela-bot"
+            git config user.email "quiniela-bot@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keep scheduled workflows alive"
+            git pull --rebase
+            git push
+          fi

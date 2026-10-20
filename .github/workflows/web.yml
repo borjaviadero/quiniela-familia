@@ -1,5 +1,6 @@
-name: Publicar web
+name: Deploy web
 
+# Publishes web/ to GitHub Pages whenever it changes.
 on:
   push:
     branches: [main]

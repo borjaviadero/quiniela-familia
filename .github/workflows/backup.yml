@@ -1,7 +1,7 @@
-name: Copia de seguridad
+name: Backup
 
-# Cada martes a las 05:23 UTC (después de cerrar la jornada del fin de semana),
-# o a mano desde Actions > Copia de seguridad > Run workflow.
+# Every Tuesday at 05:23 UTC (after the weekend matchday has closed),
+# or by hand: Actions > Backup > Run workflow.
 on:
   schedule:
     - cron: "23 5 * * 2"
@@ -31,31 +31,31 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Exportar la base de datos
+      - name: Export the database
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python -m bot.backup exportar "$RUNNER_TEMP/copia.json"
+        run: python -m bot.backup export "$RUNNER_TEMP/backup.json"
 
-      # El repositorio es público: la copia se guarda cifrada con el secreto BACKUP_KEY
-      - name: Cifrar
+      # The repository is public: the backup is stored encrypted with the BACKUP_KEY secret
+      - name: Encrypt
         env:
           BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
         run: |
           if [ -z "$BACKUP_KEY" ]; then
-            echo "::error::Falta el secreto BACKUP_KEY (Settings > Secrets and variables > Actions)."
+            echo "::error::Missing secret BACKUP_KEY (Settings > Secrets and variables > Actions)."
             exit 1
           fi
           mkdir -p backups
           openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
-            -in "$RUNNER_TEMP/copia.json" -out backups/quiniela.json.enc -pass env:BACKUP_KEY
-          rm -f "$RUNNER_TEMP/copia.json"
+            -in "$RUNNER_TEMP/backup.json" -out backups/quiniela.json.enc -pass env:BACKUP_KEY
+          rm -f "$RUNNER_TEMP/backup.json"
 
-      - name: Guardar en el repositorio
+      - name: Commit to the repository
         run: |
           git config user.name "quiniela-bot"
           git config user.email "quiniela-bot@users.noreply.github.com"
           git add backups/quiniela.json.enc
-          git commit -m "Copia de seguridad $(date -u +%Y-%m-%d)"
+          git commit -m "chore: weekly database backup $(date -u +%Y-%m-%d)"
           git pull --rebase
           git push
