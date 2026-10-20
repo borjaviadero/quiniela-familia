@@ -12,6 +12,8 @@
   Family Quiniela · betting page.
   Code and comments are in English; everything the user reads is in Spanish.
   Talks to Supabase only through three RPC functions: public_state, my_pick, submit_pick.
+  Every call carries the family key, which arrives in the link the bot posts to the
+  Telegram group (#k=...) and is remembered on the device. Without it nothing works.
   Add ?demo to the URL to preview it without a database, or ?p=5 to preselect a player.
 -->
 <style>
@@ -179,10 +181,13 @@ const CONFIG = window.QUINIELA_CONFIG;
 const params = new URLSearchParams(location.search);
 const DEMO = params.has("demo");
 const PLENO_GOALS = ["0", "1", "2", "M"];
+const familyKey = readFamilyKey();
 
 // User-facing texts (Spanish)
 const TEXT = {
   connectionError: "No se ha podido conectar. Prueba de nuevo en un momento.",
+  noKeyTitle: "Quiniela privada",
+  noKey: "Entra desde el botón «Hacer mi quiniela» del grupo de Telegram de la familia.",
   noMatchdayTitle: "Sin jornada",
   noMatchday: "Todavía no se ha publicado la quiniela de esta semana. El bot avisará en el grupo cuando esté.",
   open: (close) => `Puedes registrar y cambiar tu columna hasta el <strong>${close}</strong>.`,
@@ -207,14 +212,33 @@ const TEXT = {
     betting_closed: "El plazo de esta jornada ya está cerrado.",
     incomplete_picks: "Faltan partidos por marcar.",
     pleno_required: "Te toca el pleno al 15: marca los goles de los dos equipos.",
+    family_key_required: "Entra desde el botón «Hacer mi quiniela» del grupo de Telegram.",
   },
 };
+
+/* The family key comes in the link's fragment (#k=...), which browsers never send to
+   any server. It is remembered on the device and removed from the address bar. */
+function readFamilyKey() {
+  const fromLink = new URLSearchParams(location.hash.slice(1)).get("k") || params.get("k");
+  try {
+    if (fromLink) localStorage.setItem("quiniela-family-key", fromLink);
+    if (location.hash || params.get("k")) {
+      params.delete("k");
+      const query = params.toString();
+      history.replaceState(null, "", location.pathname + (query ? "?" + query : ""));
+    }
+    return fromLink || localStorage.getItem("quiniela-family-key");
+  } catch (e) {
+    return fromLink;
+  }
+}
 
 const $ = (id) => document.getElementById(id);
 const state = { data: null, player: null, pin: "", signs: Array(14).fill(null), pleno: [null, null] };
 
 async function rpc(fn, args = {}) {
   if (DEMO) return demoRpc(fn, args);
+  args = { p_key: familyKey, ...args };
   const r = await fetch(`${CONFIG.supabaseUrl}/rest/v1/rpc/${fn}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", apikey: CONFIG.supabaseAnonKey,
@@ -244,6 +268,12 @@ async function load() {
     state.data = await rpc("public_state");
   } catch (e) { showError(e.message); return; }
   const d = state.data;
+  if (d.error === "family_key_required") {
+    try { localStorage.removeItem("quiniela-family-key"); } catch (e) { /* ignore */ }
+    $("title").textContent = TEXT.noKeyTitle;
+    $("deadline").textContent = TEXT.noKey;
+    return;
+  }
   if (!d.matchday) {
     $("title").textContent = TEXT.noMatchdayTitle;
     $("deadline").textContent = TEXT.noMatchday;

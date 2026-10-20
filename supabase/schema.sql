@@ -74,6 +74,14 @@ create table if not exists payments (
   primary key (matchday_id, player_id)
 );
 
+-- The family key: a long random secret that travels inside the link the bot posts
+-- to the Telegram group. Without it the website can do nothing, even with a PIN.
+-- Only its hash is stored. Generate it with:  select set_family_key();
+create table if not exists family_access (
+  id        smallint primary key default 1 check (id = 1),
+  key_hash  text not null
+);
+
 -- ---------------------------------------------------------------------
 --  Security: the website (anon role) cannot touch tables, only the
 --  functions below. The bot uses the service_role key, which bypasses RLS.
@@ -84,9 +92,10 @@ alter table matches       enable row level security;
 alter table picks         enable row level security;
 alter table daily_reports enable row level security;
 alter table payments      enable row level security;
+alter table family_access enable row level security;
 
 -- =====================================================================
---  Functions (also in migrations/2026-10-20_english_names.sql: keep in sync)
+--  Functions
 -- =====================================================================
 
 -- Matchday shown on the website: the one open for betting (the nearest), otherwise
@@ -126,19 +135,28 @@ begin
   return null;
 end $$;
 
+-- True when p_key is the current family key
+create or replace function check_family_key(p_key text) returns boolean
+language sql stable security definer set search_path = public, extensions as $$
+  select exists (select 1 from family_access
+                  where p_key is not null and key_hash = crypt(p_key, key_hash));
+$$;
+
 -- ---------------------------------------------------------------------
---  Public API used by the website (errors are returned as {"error": code})
+--  Public API used by the website (errors are returned as {"error": code}).
+--  Every call needs the family key; picks also need the player's PIN.
 -- ---------------------------------------------------------------------
 
 -- Everything the website needs to draw the ticket. Other players' columns are only
 -- visible once all of them are in or betting has closed.
-create or replace function public_state() returns json
+create or replace function public_state(p_key text) returns json
 language plpgsql stable security definer set search_path = public, extensions as $$
 declare
   md matchdays;
   submitted int;
   visible boolean;
 begin
+  if not check_family_key(p_key) then return json_build_object('error', 'family_key_required'); end if;
   md := current_matchday();
   if md.id is null then return json_build_object('matchday', null); end if;
 
@@ -168,10 +186,11 @@ begin
 end $$;
 
 -- The player's own pick (to pre-fill the form)
-create or replace function my_pick(p_player smallint, p_pin text) returns json
+create or replace function my_pick(p_key text, p_player smallint, p_pin text) returns json
 language plpgsql security definer set search_path = public, extensions as $$
 declare md matchdays; r json; err text;
 begin
+  if not check_family_key(p_key) then return json_build_object('error', 'family_key_required'); end if;
   err := check_pin(p_player, p_pin);
   if err is not null then return json_build_object('error', err); end if;
   md := current_matchday();
@@ -182,11 +201,12 @@ end $$;
 
 -- Creates or updates the player's own pick. Allowed until 24 h before the first kickoff.
 create or replace function submit_pick(
-  p_player smallint, p_pin text, p_signs text, p_pleno text default null
+  p_key text, p_player smallint, p_pin text, p_signs text, p_pleno text default null
 ) returns json
 language plpgsql security definer set search_path = public, extensions as $$
 declare md matchdays; err text;
 begin
+  if not check_family_key(p_key) then return json_build_object('error', 'family_key_required'); end if;
   err := check_pin(p_player, p_pin);
   if err is not null then return json_build_object('error', err); end if;
 
@@ -228,19 +248,32 @@ language sql security definer set search_path = public, extensions as $$
    where id = p_player;
 $$;
 
--- Permissions: the website may only call these three functions
-revoke all on all functions in schema public from anon, authenticated;
-grant execute on function public_state()                            to anon;
-grant execute on function my_pick(smallint, text)                   to anon;
-grant execute on function submit_pick(smallint, text, text, text)   to anon;
+-- Family key management (SQL Editor only). Generates a new random key, stores its
+-- hash and returns the key once: save it as the FAMILY_KEY secret in GitHub.
+-- Running it again revokes the previous key.
+create or replace function set_family_key() returns text
+language plpgsql security definer set search_path = public, extensions as $$
+declare k text := translate(encode(gen_random_bytes(18), 'base64'), '+/=', '-_');
+begin
+  insert into family_access (id, key_hash) values (1, crypt(k, gen_salt('bf')))
+  on conflict (id) do update set key_hash = excluded.key_hash;
+  return k;
+end $$;
+
+-- Permissions: the website may only call these three functions. PostgreSQL lets
+-- PUBLIC execute every function by default, so that is revoked too (otherwise anyone
+-- with the public key could call set_pin or set_family_key).
+revoke all on all functions in schema public from public, anon, authenticated;
+grant execute on function public_state(text)                              to anon;
+grant execute on function my_pick(text, smallint, text)                   to anon;
+grant execute on function submit_pick(text, smallint, text, text, text)   to anon;
 
 -- =====================================================================
---  Players (change the PINs afterwards with: select set_pin(1::smallint, '4821');)
+--  Players. They are created with a random, unknown PIN: set each real PIN
+--  afterwards, privately, in the SQL Editor (never commit real PINs):
+--    select set_pin(1::smallint, '....');
 -- =====================================================================
-insert into players (id, name, pin_hash) values
-  (1, 'Luis Angel', crypt('1111', gen_salt('bf'))),
-  (2, 'Rosana',     crypt('2222', gen_salt('bf'))),
-  (3, 'Joseba',     crypt('3333', gen_salt('bf'))),
-  (4, 'Lara',       crypt('4444', gen_salt('bf'))),
-  (5, 'Borja',      crypt('5555', gen_salt('bf')))
+insert into players (id, name, pin_hash)
+select id, name, crypt(gen_random_uuid()::text, gen_salt('bf'))
+  from (values (1, 'Luis Angel'), (2, 'Rosana'), (3, 'Joseba'), (4, 'Lara'), (5, 'Borja')) as p(id, name)
 on conflict (id) do nothing;

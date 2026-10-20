@@ -26,7 +26,11 @@ from .rules import (MADRID, column_prizes, days_pending_report, hits_by_player, 
 from .telegram import Telegram
 from .ticket import render
 
+# Link behind the "Hacer mi quiniela" button. The family key travels in the URL
+# fragment, so only people in the Telegram group can use the web app.
+_FAMILY_KEY = os.environ.get("FAMILY_KEY", "")
 WEB_URL = os.environ.get("WEB_URL", "")
+WEB_LINK = f"{WEB_URL}#k={_FAMILY_KEY}" if WEB_URL and _FAMILY_KEY else WEB_URL
 BETTING_CLOSES_BEFORE = timedelta(hours=24)   # picks can be edited until 24 h before the first kickoff
 REMINDER_BEFORE = timedelta(hours=48)         # reminder to whoever is missing, 48 h before
 PRIZE_WAIT = timedelta(days=10)               # stop waiting for the official prize breakdown after this
@@ -119,7 +123,7 @@ class Bot:
             # If the matchday was only announced shortly before, a reminder would be noise
             announced_late = md.get("created_at") and to_datetime(md["created_at"]) > remind_at - timedelta(hours=6)
             if missing and not announced_late:
-                self.tg.send_message(msg.reminder(md["number"], missing, close), msg.PICK_BUTTON, WEB_URL)
+                self.tg.send_message(msg.reminder(md["number"], missing, close), msg.PICK_BUTTON, WEB_LINK)
             self.db.update_matchday(md["id"], reminder_sent=True)
 
         if not md["picks_published"] and (not missing or self.now >= close):
@@ -150,7 +154,7 @@ class Bot:
         self.db.update_matchday(md["id"], first_kickoff=new)
         print(f"Matchday {md['number']}: first kickoff moved from {old} to {new}")
         if md["announced"]:
-            self.tg.send_message(msg.schedule_change(md["number"], new), msg.PICK_BUTTON, WEB_URL)
+            self.tg.send_message(msg.schedule_change(md["number"], new), msg.PICK_BUTTON, WEB_LINK)
         return {**md, "first_kickoff": new}
 
     def announce(self, md: dict, close: datetime):
@@ -166,7 +170,7 @@ class Bot:
         png = render(title=msg.ticket_title(md["number"]), subtitle=msg.ticket_subtitle_deadline(close),
                      matches=self.db.matches(md["id"]), players=[], picks={}, pleno_player_id=None,
                      show_results=False)
-        self.tg.send_photo(png, caption, msg.PICK_BUTTON, WEB_URL)
+        self.tg.send_photo(png, caption, msg.PICK_BUTTON, WEB_LINK)
 
     def overlap_notice(self, md: dict) -> str | None:
         """If an earlier matchday is still being played, warn that these are separate Quinielas."""

@@ -34,9 +34,10 @@ Right: the betting web app. Test data.</sub></p>
   a built-in `diagnose` command.
 - **Self-maintaining rules**: the LaLiga team list is pulled from ESPN every season, kickoff
   changes move the betting deadline automatically, and postponed matches are handled.
-- **Secure by default**: PINs hashed with bcrypt and rate-limited, Row Level Security with
-  the public site restricted to three database functions, secrets kept out of the code,
-  and encrypted backups in a public repository.
+- **Secure by default**: the public website only works with a *family key* that travels in
+  the link posted to the private Telegram group (never in the repository), plus a per-player
+  PIN hashed with bcrypt and rate-limited; Row Level Security with the site restricted to
+  three database functions; secrets kept out of the code; encrypted backups.
 - **Tested in CI**: an offline simulation runs on every push and exercises full matchdays
   (announcement → results → payments → prizes), including edge cases.
 
@@ -114,8 +115,11 @@ The bot runs Tuesday–Thursday every hour and Friday–Monday every 20 minutes.
 ### 1. Supabase
 1. Create a free project at <https://supabase.com>.
 2. *SQL Editor* → paste `supabase/schema.sql` → **Run**.
-3. Set real PINs: `select set_pin(1::smallint, '4821');` (ids 1–5 are the players).
-4. *Project Settings → API Keys → Legacy anon, service_role API keys*: note the **URL**,
+3. Set each player's PIN privately: `select set_pin(1::smallint, '....');` (ids 1–5).
+   Never commit real PINs.
+4. Generate the family key: `select set_family_key();` and copy the value it returns
+   (it is shown only once; only its hash is stored).
+5. *Project Settings → API Keys → Legacy anon, service_role API keys*: note the **URL**,
    the **anon key** and the **service_role key**. The service_role key is secret and only
    goes into GitHub Secrets.
 
@@ -129,9 +133,10 @@ The bot runs Tuesday–Thursday every hour and Friday–Monday every 20 minutes.
 1. Push this folder to a **public** repository (unlimited Actions minutes; no secrets in code).
 2. *Settings → Secrets and variables → Actions*:
    - Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`,
-     `BACKUP_KEY` (a long made-up password that encrypts backups; **store it elsewhere
+     `FAMILY_KEY` (the value from step 1.4), `BACKUP_KEY` (a long made-up password that encrypts backups; **store it elsewhere
      too**, it cannot be recovered from GitHub)
-   - Variable: `WEB_URL` (the GitHub Pages address from step 4)
+   - Variable: `WEB_URL` (the GitHub Pages address from step 4). The family key is added
+     to the link by the bot; keep it a *secret*, because Actions logs are public.
 3. To find the chat and user ids, open `https://api.telegram.org/bot<TOKEN>/getUpdates`
    after writing in the group (or *Actions → Bot → Run workflow → telegram-ids*). The group
    id is negative. Store each player's id:
@@ -141,7 +146,10 @@ The bot runs Tuesday–Thursday every hour and Friday–Monday every 20 minutes.
 1. Fill in `web/config.js` with the Supabase URL and **anon** key (public by design).
 2. *Settings → Pages → Source: GitHub Actions*. It is published at
    `https://<user>.github.io/<repo>/`.
-3. Preview without a database: add `?demo` to the URL. Preselect a player: `?p=5`.
+3. Players always open it from the bot's *Hacer mi quiniela* button, which carries the
+   family key (`#k=…`, a URL fragment that is never sent to any server); the device then
+   remembers it. Opened without the key it only shows *«Quiniela privada»*.
+4. Preview without a database: add `?demo` to the URL. Preselect a player: `?p=5`.
 
 ### 5. Check the data sources
 *Actions → Bot → Run workflow → diagnose* prints the ESPN team list, the upcoming
@@ -168,6 +176,8 @@ Then, in the SQL Editor: `select setval('matchdays_id_seq', (select coalesce(max
 - **A run fails** (GitHub emails you): *Actions* → the red run → *bot* → *Run*, and read the error.
 - **The bot stops posting**: if the Telegram group became a *supergroup* its id changed
   (it starts with `-100`); update `TELEGRAM_CHAT_ID`.
+- **Rotate the family key** (e.g. if a link leaks): `select set_family_key();`, update the
+  `FAMILY_KEY` secret and re-send the announcement (below) so the button carries the new key.
 - **Re-send a matchday announcement**:
   `update matchdays set announced = false where number = 16;` then *Run workflow → tick*.
 - **GitHub Actions versions**: workflows use `actions/checkout@v5`, `actions/setup-python@v6`
