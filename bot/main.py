@@ -130,12 +130,11 @@ class Bot:
 
     # ------------------------------------------------------------------
     def procesar(self, jo: dict):
+        if self.ahora < _dt(jo["primer_partido"]):
+            jo = self.refrescar_partidos(jo)
         primer = _dt(jo["primer_partido"])
         cierre = primer - timedelta(hours=24)
         aviso = primer - timedelta(hours=48)
-
-        if self.ahora < primer:
-            self.refrescar_partidos(jo)
 
         if not jo["anunciada"]:
             self.anunciar(jo, cierre)
@@ -163,16 +162,32 @@ class Bot:
         if self.ahora >= primer:
             self.seguir_resultados(jo, apuestas)
 
-    def refrescar_partidos(self, jo: dict):
-        """Antes de empezar, actualiza nombres y horarios por si Loterías los cambia."""
+    def refrescar_partidos(self, jo: dict) -> dict:
+        """Antes de empezar, actualiza nombres y horarios por si Loterías los cambia
+        (aplazamientos, cambios de hora). Si cambia el primer partido mientras se puede
+        apostar, se mueve el plazo y se avisa en el grupo. Devuelve la jornada actualizada."""
         try:
             ps = self.fuente.partidos(jo["id_sorteo_lae"], _fecha_iso(jo.get("fecha_sorteo")))
         except Exception as e:  # noqa: BLE001
             print(f"No se pudieron refrescar los partidos de la jornada {jo['numero']}: {e}")
-            return
-        if ps:
-            self.db.guardar_resultados(jo["id"], [{**p, "goles_local": None, "goles_visitante": None,
-                                                   "signo": None} for p in ps])
+            return jo
+        if not ps:
+            return jo
+        self.db.guardar_resultados(jo["id"], [{**p, "goles_local": None, "goles_visitante": None,
+                                               "signo": None} for p in ps])
+        inicios = [_dt(p["inicio"]) for p in ps if p.get("inicio")]
+        antiguo = _dt(jo["primer_partido"])
+        if not inicios or min(inicios) == antiguo or self.ahora >= antiguo - timedelta(hours=24):
+            return jo          # sin cambios, o el plazo ya estaba cerrado
+        nuevo = min(inicios)
+        self.db.actualizar_jornada(jo["id"], primer_partido=nuevo)
+        print(f"Jornada {jo['numero']}: el primer partido pasa de {antiguo} a {nuevo}")
+        if jo["anunciada"]:
+            self.tg.mensaje(f"⚠️ <b>Cambio de horario en la jornada {jo['numero']}</b>\n"
+                            f"El primer partido pasa a ser el {fmt_fecha(nuevo)}, así que el plazo para "
+                            f"registrar la columna cierra ahora el {fmt_fecha(nuevo - timedelta(hours=24))}.",
+                            BOTON, WEB_URL)
+        return {**jo, "primer_partido": nuevo}
 
     def anunciar(self, jo: dict, cierre):
         partidos = self.db.partidos(jo["id"])
@@ -215,7 +230,10 @@ class Bot:
 
         enviados = self.db.partes_enviados(jo["id"])
         for dia in dias_con_parte_pendiente(partidos, enviados, self.ahora):
-            jugados = [p for p in partidos if p.get("signo") and _dt(p["inicio"]).astimezone(MADRID).date() <= dia]
+            hasta_dia = [p for p in partidos if p["posicion"] <= 14 and p.get("inicio")
+                         and _dt(p["inicio"]).astimezone(MADRID).date() <= dia]
+            jugados = [p for p in hasta_dia if p.get("signo")]
+            sin_resultado = [p for p in hasta_dia if not p.get("signo")]
             res = {p["posicion"]: p["signo"] for p in jugados}
             aciertos = self.aciertos_completos(apuestas, res)
             pie = [f"{self.jug[j]['nombre']}: {a}" for j, a in sorted(aciertos.items(), key=lambda x: -x[1])]
@@ -226,9 +244,13 @@ class Bot:
                          pleno_jugador_id=jo["pleno_jugador_id"], mostrar_resultados=True)
             lider = max(aciertos.values())
             lideres = [self.jug[j]["nombre"] for j, a in aciertos.items() if a == lider]
-            self.tg.foto(png, f"📊 <b>Así va la jornada {jo['numero']} tras el {nombre_dia(dia)}</b>\n"
-                              f"{len(jugados)} de 14 partidos jugados. "
-                              f"Va en cabeza {lista_nombres(lideres)} con {lider} aciertos.")
+            texto = (f"📊 <b>Así va la jornada {jo['numero']} tras el {nombre_dia(dia)}</b>\n"
+                     f"{len(jugados)} de 14 partidos jugados. "
+                     f"Va en cabeza {lista_nombres(lideres)} con {lider} aciertos.")
+            if sin_resultado:
+                texto += ("\n⚠️ Sin resultado todavía (aplazado o pendiente): "
+                          + ", ".join(f"{p['local']} - {p['visitante']}" for p in sin_resultado) + ".")
+            self.tg.foto(png, texto)
             self.db.registrar_parte(jo["id"], dia)
 
         if jornada_completa(partidos):

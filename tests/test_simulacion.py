@@ -44,7 +44,7 @@ class FakeFuente:
         out = [{"id_sorteo": "LAQU-14", "numero": 14, "fecha_sorteo": date(2026, 10, 25),
                 "primer_partido": SAB, "partidos": self._partidos()}]
         if self.con_jornada_15:    # jornada de entre semana, publicada mientras se juega la 14
-            martes = datetime(2026, 10, 27, 21, 0, tzinfo=MADRID)
+            martes = datetime(2026, 10, 27, 21, 0, tzinfo=MADRID) - self.adelanto_15
             out.append({"id_sorteo": "LAQU-15", "numero": 15, "fecha_sorteo": date(2026, 10, 28),
                         "primer_partido": martes,
                         "partidos": [{"posicion": i + 1, "local": EQUIPOS[i][1], "visitante": EQUIPOS[i][0],
@@ -58,6 +58,7 @@ class FakeFuente:
         return out
 
     con_jornada_15 = False
+    adelanto_15 = timedelta(0)
 
     def escrutinio(self, id_sorteo, fecha):
         if id_sorteo != "LAQU-14" or not self.jugados_hasta or self.jugados_hasta < datetime(2026, 10, 26, tzinfo=MADRID):
@@ -150,6 +151,8 @@ def main(salida: str):
     tick(datetime(2026, 10, 25, 0, 30, tzinfo=MADRID), "acaba el sábado: parte diario")
     fuente.con_jornada_15 = True
     tick(datetime(2026, 10, 25, 10, 0, tzinfo=MADRID), "sale la 15 (martes) con la 14 en juego")
+    fuente.adelanto_15 = timedelta(hours=2)
+    tick(datetime(2026, 10, 25, 12, 0, tzinfo=MADRID), "la 15 adelanta su primer partido")
     fuente.jugados_hasta = datetime(2026, 10, 26, 2, 0, tzinfo=MADRID)
     tick(datetime(2026, 10, 26, 2, 0, tzinfo=MADRID), "acaba el domingo: cierre y pagos")
     tick(datetime(2026, 10, 26, 3, 0, tzinfo=MADRID), "otra pasada (no repite cierre)")
@@ -164,6 +167,15 @@ def main(salida: str):
     j15 = next(j for j in db.jornadas if j["id"] == 15)
     assert j14["finalizada"] and not j15["finalizada"] and j15["anunciada"]
     assert not any(j["id"] == 16 for j in db.jornadas), "la jornada de Copa no debe crearse"
+    assert j15["primer_partido"] == datetime(2026, 10, 27, 19, 0, tzinfo=MADRID), "el plazo debe moverse"
+
+    # Partido aplazado: el parte del día sale igual pasadas 8 h, pero no si no hay ningún resultado
+    from bot.logica import dias_con_parte_pendiente
+    ps = [{"posicion": i + 1, "inicio": (SAB if i < 7 else DOM) + timedelta(hours=i % 3),
+           "signo": "1" if i < 6 else None} for i in range(15)]
+    assert dias_con_parte_pendiente(ps, set(), SAB + timedelta(hours=4)) == []
+    assert dias_con_parte_pendiente(ps, set(), SAB + timedelta(hours=11)) == [SAB.date()]
+    assert dias_con_parte_pendiente([{**p, "signo": None} for p in ps], set(), SAB + timedelta(hours=11)) == []
     print("Pleno jornada 14:", j14["pleno_jugador_id"], "(por sorteo)" if j14["pleno_por_sorteo"] else "")
     print("Pleno jornada 15:", j15["pleno_jugador_id"], "(por sorteo)" if j15["pleno_por_sorteo"] else "")
     print("Pagan la siguiente:", db.pag[14])

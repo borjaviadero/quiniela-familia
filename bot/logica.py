@@ -12,6 +12,9 @@ PRECIO_BOLETO = Decimal("3.75")
 # Margen tras el inicio del último partido del día para dar por terminado
 # el día si Loterías no publica la hora final (90' + descanso + añadido).
 DURACION_PARTIDO = timedelta(hours=2)
+# Si un partido no tiene resultado tantas horas después del último inicio del día
+# (aplazado, suspendido…), el parte de ese día se manda igualmente sin él.
+ESPERA_MAX_RESULTADO = timedelta(hours=8)
 
 
 # Lista de RESPALDO de equipos de Primera 2026-27, por si ESPN no responde.
@@ -100,6 +103,7 @@ def dias_de_partido(partidos: list[dict]) -> dict[date, list[int]]:
 
 def dias_con_parte_pendiente(partidos: list[dict], ya_enviados: set[date], ahora: datetime) -> list[date]:
     """Días cuyos partidos tienen ya todos resultado oficial y aún no se ha mandado el parte.
+    Si alguno no lo tiene pasadas ESPERA_MAX_RESULTADO horas (aplazado), se manda igual.
     El último día de la jornada no lleva parte diario: lo cubre el resultado final."""
     por_pos = {p["posicion"]: p for p in partidos}
     dias = dias_de_partido(partidos)
@@ -111,8 +115,11 @@ def dias_con_parte_pendiente(partidos: list[dict], ya_enviados: set[date], ahora
         if dia == ultimo_dia or dia in ya_enviados:
             continue
         todos_jugados = all(por_pos[pos].get("signo") for pos in posiciones if pos <= 14)
+        # Si no hay ni un resultado de ese día, no es un aplazamiento: Loterías aún no ha publicado
+        alguno_jugado = any(por_pos[pos].get("signo") for pos in posiciones if pos <= 14)
         ultimo_inicio = max(_dt(por_pos[pos]["inicio"]) for pos in posiciones)
-        if todos_jugados and ahora >= ultimo_inicio + DURACION_PARTIDO:
+        if (todos_jugados and ahora >= ultimo_inicio + DURACION_PARTIDO) or \
+                (alguno_jugado and ahora >= ultimo_inicio + ESPERA_MAX_RESULTADO):
             pendientes.append(dia)
     return pendientes
 
