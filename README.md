@@ -1,5 +1,9 @@
 # Family Quiniela
 
+[![Tests](https://github.com/borjaviadero/quiniela-familia/actions/workflows/tests.yml/badge.svg)](https://github.com/borjaviadero/quiniela-familia/actions/workflows/tests.yml)
+[![Bot](https://github.com/borjaviadero/quiniela-familia/actions/workflows/quiniela.yml/badge.svg)](https://github.com/borjaviadero/quiniela-familia/actions/workflows/quiniela.yml)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+
 A serverless bot that runs my family's weekly **Quiniela** (the Spanish football pools)
 end to end: it detects each new LaLiga matchday from the official lottery data, collects
 everyone's predictions through a small web app, posts progress and results to a Telegram
@@ -8,6 +12,14 @@ free tiers, with no server to maintain.
 
 📄 **Full guide** (functional and technical, for any reader):
 [English](docs/Family-Quiniela-Guide-EN.pdf) · [Español](docs/Family-Quiniela-Guide-ES.pdf)
+
+<p align="center">
+  <img src="docs/images/ticket.png" alt="Progress report posted to the group after Saturday's matches" width="520">
+  &nbsp;&nbsp;
+  <img src="docs/images/web-app.png" alt="Betting web app on a phone" width="230">
+</p>
+<p align="center"><sub>Left: progress report posted to Telegram after Saturday's matches (hits in green, misses in red).
+Right: the betting web app. Test data.</sub></p>
 
 > The code, documentation and database are in English. Everything the players see
 > (Telegram messages, ticket images and the web app) is in Spanish, their language.
@@ -25,8 +37,8 @@ free tiers, with no server to maintain.
 - **Secure by default**: PINs hashed with bcrypt and rate-limited, Row Level Security with
   the public site restricted to three database functions, secrets kept out of the code,
   and encrypted backups in a public repository.
-- **Tested**: an offline simulation exercises a full matchday (announcement → results →
-  payments → prizes) including edge cases.
+- **Tested in CI**: an offline simulation runs on every push and exercises full matchdays
+  (announcement → results → payments → prizes), including edge cases.
 
 ## Architecture
 
@@ -169,6 +181,7 @@ Then, in the SQL Editor: `select setval('matchdays_id_seq', (select coalesce(max
 .github/workflows/quiniela.yml   Bot: schedule and secrets
 .github/workflows/web.yml        Deploys web/ to GitHub Pages
 .github/workflows/backup.yml     Weekly encrypted database backup
+.github/workflows/tests.yml      Runs the simulation on every push
 bot/main.py                      Orchestration: one idempotent run (tick) and the CLI
 bot/rules.py                     Game rules: hits, who pays, Pleno, daily reports, league filter, prizes
 bot/lae.py                       Client for the official lottery data (fixtures, results, prizes)
@@ -182,7 +195,7 @@ web/index.html · web/config.js   Betting web app
 supabase/schema.sql              Database schema, security and functions
 supabase/migrations/             One-off scripts applied to the production database
 tests/test_simulation.py         Offline simulation of whole matchdays
-docs/                            Full guide (English and Spanish)
+docs/                            Full guide (English and Spanish) and README images
 backups/                         Encrypted database backups
 ```
 

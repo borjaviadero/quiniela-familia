@@ -1,0 +1,37 @@
+name: Tests
+
+# Runs the offline simulation on every push and pull request.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Simulate whole matchdays
+        run: python -m tests.test_simulation "$RUNNER_TEMP/simulation"
+
+      - name: Keep the generated messages and images
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-output
+          path: ${{ runner.temp }}/simulation
+          retention-days: 7
