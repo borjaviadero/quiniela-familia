@@ -29,8 +29,13 @@ class DB:
     def jugadores(self) -> list[dict]:
         return self._req("GET", "jugadores", {"select": "id,nombre,telegram_user_id", "order": "id"})
 
-    def jornada_abierta(self) -> dict | None:
-        r = self._req("GET", "jornadas", {"finalizada": "eq.false", "order": "primer_partido.desc", "limit": 1})
+    def jornadas_abiertas(self) -> list[dict]:
+        return self._req("GET", "jornadas", {"finalizada": "eq.false", "order": "primer_partido.asc"})
+
+    def jornada_anterior(self, primer_partido) -> dict | None:
+        """La jornada inmediatamente anterior (por fecha del primer partido), acabada o no."""
+        r = self._req("GET", "jornadas", {"primer_partido": f"lt.{_json(primer_partido)}",
+                                          "order": "primer_partido.desc", "limit": 1})
         return r[0] if r else None
 
     def ultima_finalizada(self) -> dict | None:

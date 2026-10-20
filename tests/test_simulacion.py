@@ -40,12 +40,22 @@ class FakeFuente:
                         "goles_local": gl, "goles_visitante": gv, "signo": signo})
         return out
 
-    def proxima_jornada(self):
-        return {"id_sorteo": "LAQU-14", "numero": 14, "fecha_sorteo": date(2026, 10, 25),
-                "primer_partido": SAB, "partidos": self._partidos()}
+    def proximas_jornadas(self):
+        out = [{"id_sorteo": "LAQU-14", "numero": 14, "fecha_sorteo": date(2026, 10, 25),
+                "primer_partido": SAB, "partidos": self._partidos()}]
+        if self.con_jornada_15:    # jornada de entre semana, publicada mientras se juega la 14
+            martes = datetime(2026, 10, 27, 21, 0, tzinfo=MADRID)
+            out.append({"id_sorteo": "LAQU-15", "numero": 15, "fecha_sorteo": date(2026, 10, 28),
+                        "primer_partido": martes,
+                        "partidos": [{"posicion": i + 1, "local": f"Local {i+1}", "visitante": f"Visit {i+1}",
+                                      "inicio": martes + timedelta(hours=24 * (i % 2)), "goles_local": None,
+                                      "goles_visitante": None, "signo": None} for i in range(15)]})
+        return out
+
+    con_jornada_15 = False
 
     def resultados(self, id_sorteo, fecha):
-        return self._partidos()
+        return self._partidos() if id_sorteo == "LAQU-14" else None
 
 
 class FakeDB:
@@ -62,9 +72,13 @@ class FakeDB:
         self.pag[13] = [{"jugador_id": 3, "importe": Decimal("3.75")}]
 
     def jugadores(self): return deepcopy(self.js)
-    def jornada_abierta(self):
-        a = [j for j in self.jornadas if not j["finalizada"]]
-        return deepcopy(a[-1]) if a else None
+    def jornadas_abiertas(self):
+        return deepcopy(sorted((j for j in self.jornadas if not j["finalizada"]),
+                               key=lambda j: j["primer_partido"]))
+    def jornada_anterior(self, primer):
+        a = [j for j in self.jornadas if j["primer_partido"] < primer]
+        return deepcopy(max(a, key=lambda j: j["primer_partido"])) if a else None
+    ahora = None
     def ultima_finalizada(self):
         a = [j for j in self.jornadas if j["finalizada"]]
         return deepcopy(a[-1]) if a else None
@@ -76,9 +90,9 @@ class FakeDB:
     def partes_enviados(self, jid): return {d for (j, d) in self.partes if j == jid}
     def pagos(self, jid): return deepcopy(self.pag.get(jid, []))
     def crear_jornada(self, jo, partidos):
-        jo = {**jo, "id": 14, "anunciada": False, "recordatorio_enviado": False,
+        jo = {**jo, "id": jo["numero"], "created_at": self.ahora, "anunciada": False, "recordatorio_enviado": False,
               "apuestas_publicadas": False, "finalizada": False}
-        self.jornadas.append(jo); self.parts[14] = deepcopy(partidos)
+        self.jornadas.append(jo); self.parts[jo["id"]] = deepcopy(partidos)
         return deepcopy(jo)
     def actualizar_jornada(self, jid, **c):
         next(j for j in self.jornadas if j["id"] == jid).update(c)
@@ -95,6 +109,7 @@ def main(salida: str):
 
     def tick(cuando: datetime, etiqueta: str):
         antes = tg.n
+        db.ahora = cuando
         Bot(db, tg, fuente, ahora=cuando, rng=rng).tick()
         print(f"{cuando:%a %d %H:%M}  {etiqueta:<38} -> {tg.n - antes} envío(s)")
 
@@ -102,7 +117,7 @@ def main(salida: str):
     tick(datetime(2026, 10, 20, 12, 0, tzinfo=MADRID), "otra pasada (no repite)")
     # Apuestan 3 de 5
     db.aps[14] = {1: "11221X111X11X1", 2: "1X2111X11112X1", 4: "112X1X1X1X1121"}
-    jo = db.jornada_abierta()
+    jo = db.jornadas_abiertas()[0]
     tick(datetime(2026, 10, 22, 14, 30, tzinfo=MADRID), "48 h antes: aviso a quien falta")
     tick(datetime(2026, 10, 22, 16, 0, tzinfo=MADRID), "otra pasada (no repite aviso)")
     db.aps[14][3] = "1X1X1X1X1X1X1X"
@@ -113,18 +128,23 @@ def main(salida: str):
     tick(datetime(2026, 10, 24, 19, 0, tzinfo=MADRID), "sábado a medias (no envía)")
     fuente.jugados_hasta = datetime(2026, 10, 25, 0, 30, tzinfo=MADRID)
     tick(datetime(2026, 10, 25, 0, 30, tzinfo=MADRID), "acaba el sábado: parte diario")
+    fuente.con_jornada_15 = True
+    tick(datetime(2026, 10, 25, 10, 0, tzinfo=MADRID), "sale la 15 (martes) con la 14 en juego")
     fuente.jugados_hasta = datetime(2026, 10, 26, 2, 0, tzinfo=MADRID)
     tick(datetime(2026, 10, 26, 2, 0, tzinfo=MADRID), "acaba el domingo: cierre y pagos")
     tick(datetime(2026, 10, 26, 3, 0, tzinfo=MADRID), "otra pasada (no repite cierre)")
+    tick(datetime(2026, 10, 26, 9, 0, tzinfo=MADRID), "lunes: aviso 48 h de la 15")
 
     # Comprobaciones de reglas
     assert quienes_pagan({1: 5, 2: 3, 3: 3, 4: 9, 5: 7}) == {2: Decimal("1.87"), 3: Decimal("1.88")}
     assert sum(quienes_pagan({1: 2, 2: 2, 3: 2, 4: 9, 5: 7}).values()) == Decimal("3.75")
     assert elegir_pleno({1: 9, 2: 12, 3: 4}, [1, 2, 3]) == (2, False)
     assert elegir_pleno(None, [1, 2, 3, 4, 5], random.Random(1))[1] is True
-    assert db.jornadas[-1]["finalizada"]
-    print("Pleno jornada 14:", db.jornadas[-1]["pleno_jugador_id"],
-          "(por sorteo)" if db.jornadas[-1]["pleno_por_sorteo"] else "")
+    j14 = next(j for j in db.jornadas if j["id"] == 14)
+    j15 = next(j for j in db.jornadas if j["id"] == 15)
+    assert j14["finalizada"] and not j15["finalizada"] and j15["anunciada"]
+    print("Pleno jornada 14:", j14["pleno_jugador_id"], "(por sorteo)" if j14["pleno_por_sorteo"] else "")
+    print("Pleno jornada 15:", j15["pleno_jugador_id"], "(por sorteo)" if j15["pleno_por_sorteo"] else "")
     print("Pagan la siguiente:", db.pag[14])
     print("OK")
 

@@ -68,39 +68,50 @@ class Bot:
 
     # ------------------------------------------------------------------
     def tick(self):
-        jornada = self.db.jornada_abierta()
-        if jornada is None:
-            jornada = self.buscar_jornada_nueva()
-            if jornada is None:
-                print("No hay jornada abierta ni nueva publicada.")
-                return
-        self.procesar(jornada)
+        self.buscar_jornadas_nuevas()
+        abiertas = self.db.jornadas_abiertas()
+        if not abiertas:
+            print("No hay jornadas abiertas.")
+        for jo in abiertas:
+            self.procesar(jo)
 
-    def buscar_jornada_nueva(self) -> dict | None:
-        nueva = self.fuente.proxima_jornada()
-        if not nueva or not nueva["numero"] or not nueva["primer_partido"]:
-            return None
-        temporada = temporada_de(nueva["fecha_sorteo"] or nueva["primer_partido"])
-        if self.db.jornada_existe(temporada, nueva["numero"]):
-            return None
-        if nueva["primer_partido"] - timedelta(hours=24) <= self.ahora:
-            print(f"Jornada {nueva['numero']} publicada demasiado tarde para apostar; se omite.")
-            return None
+    def buscar_jornadas_nuevas(self):
+        for nueva in self.fuente.proximas_jornadas():
+            if not nueva["numero"] or not nueva["primer_partido"]:
+                continue
+            temporada = temporada_de(nueva["fecha_sorteo"] or nueva["primer_partido"])
+            if self.db.jornada_existe(temporada, nueva["numero"]):
+                continue
+            if nueva["primer_partido"] - timedelta(hours=24) <= self.ahora:
+                print(f"Jornada {nueva['numero']}: publicada demasiado tarde para apostar; se omite.")
+                continue
+            self.crear_jornada(nueva, temporada)
 
-        anterior = self.db.ultima_finalizada()
+    def crear_jornada(self, nueva: dict, temporada: str) -> dict:
+        # Pleno: el que más acertó en la jornada anterior. Si esa aún se está jugando
+        # (jornadas solapadas), se usa la última terminada.
+        anterior = self.db.jornada_anterior(nueva["primer_partido"])
+        if anterior and not anterior["finalizada"]:
+            anterior = self.db.ultima_finalizada()
         aciertos_ant = self.aciertos_de(anterior) if anterior else None
         pleno_id, por_sorteo = elegir_pleno(aciertos_ant, list(self.jug), self.rng)
 
-        partidos = [{k: p[k] for k in ("posicion", "local", "visitante", "inicio",
-                                       "goles_local", "goles_visitante", "signo")}
+        partidos = [{k: p[k] for k in ("posicion", "local", "visitante", "inicio")}
                     for p in nueva["partidos"]]
-        for p in partidos:          # resultados que pudieran venir de antes no cuentan
+        for p in partidos:          # los resultados se cargan después, al jugarse
             p.update(goles_local=None, goles_visitante=None, signo=None)
         return self.db.crear_jornada({
             "temporada": temporada, "numero": nueva["numero"], "fecha_sorteo": nueva["fecha_sorteo"],
             "id_sorteo_lae": nueva["id_sorteo"], "primer_partido": nueva["primer_partido"],
             "pleno_jugador_id": pleno_id, "pleno_por_sorteo": por_sorteo,
         }, partidos)
+
+    def pagos_anterior(self, jo: dict) -> list[dict]:
+        """Quién paga esta jornada: los perdedores de la inmediatamente anterior, si ya acabó."""
+        anterior = self.db.jornada_anterior(jo["primer_partido"])
+        if anterior and anterior["finalizada"]:
+            return self.db.pagos(anterior["id"])
+        return []
 
     # ------------------------------------------------------------------
     def procesar(self, jo: dict):
@@ -116,7 +127,8 @@ class Bot:
         faltan = [j for j in self.jugadores if j["id"] not in apuestas]
 
         if not jo["recordatorio_enviado"] and aviso <= self.ahora < cierre:
-            if faltan:
+            anunciada_tarde = jo.get("created_at") and _dt(jo["created_at"]) > aviso - timedelta(hours=6)
+            if faltan and not anunciada_tarde:
                 self.tg.mensaje(
                     f"⏰ {lista_nombres([mencion(j) for j in faltan])}, todavía no habéis registrado "
                     f"la quiniela de la jornada {jo['numero']}. El plazo cierra el {fmt_fecha(cierre)}."
@@ -139,14 +151,13 @@ class Bot:
                   f"Tenéis hasta el {fmt_fecha(cierre)} para registrar vuestra columna."]
         if jo["pleno_jugador_id"]:
             if not jo["pleno_por_sorteo"]:
-                motivo = "por ser quien más acertó la jornada pasada"
+                motivo = "por ser quien más acertó"
             elif self.db.ultima_finalizada():
-                motivo = "sorteado entre los que más acertaron la jornada pasada"
+                motivo = "sorteado entre los que más acertaron"
             else:
                 motivo = "por sorteo"
             lineas.append(f"El pleno al 15 lo rellena {mencion(self.jug[jo['pleno_jugador_id']])} ({motivo}).")
-        anterior = self.db.ultima_finalizada()
-        if anterior and (pagos := self.db.pagos(anterior["id"])):
+        if pagos := self.pagos_anterior(jo):
             lineas.append(texto_pago(pagos, self.jug, "abonarla") + ".")
         png = boleto(titulo=f"Jornada {jo['numero']}", subtitulo=f"Plazo: {fmt_fecha(cierre)}",
                      partidos=partidos, jugadores=[], apuestas={}, pleno_jugador_id=None,
@@ -156,8 +167,7 @@ class Bot:
     def publicar_apuestas(self, jo: dict, apuestas: dict, faltan: list[dict]):
         partidos = self.db.partidos(jo["id"])
         lineas = [f"📋 <b>Aquí están las apuestas de la jornada {jo['numero']}</b>"]
-        anterior = self.db.ultima_finalizada()
-        if anterior and (pagos := self.db.pagos(anterior["id"])):
+        if pagos := self.pagos_anterior(jo):
             lineas.append(texto_pago(pagos, self.jug, "abonarla") + ".")
         if faltan:
             lineas.append(f"Sin columna: {lista_nombres([j['nombre'] for j in faltan])} (cuenta como 0 aciertos).")
@@ -236,39 +246,20 @@ def _fecha_iso(v):
 
 
 def diagnostico_lae():
-    """Prueba varias direcciones de Loterías y vuelca lo que devuelven."""
-    from datetime import date as _date
-    base = "https://www.loteriasyapuestas.es"
-    hoy = datetime.now(MADRID).date()
-    f = lambda d: d.strftime("%Y%m%d")  # noqa: E731
-    urls = [f"{base}/servicios/proximosv3?game_id=LAQU&num=2"]
-    codigo, texto = lae_mod.probar(urls[0])
-    print(f"### {codigo}  {urls[0]}\n{texto}\n")
-    sorteos = []
-    try:
-        sorteos = json.loads(texto)
-    except Exception:  # noqa: BLE001
-        pass
-    for s in sorteos if isinstance(sorteos, list) else []:
-        ids, fecha = s.get("id_sorteo"), str(s.get("fecha", ""))[:10].replace("-", "")
-        urls += [
-            f"{base}/servicios/fechav3?game_id=LAQU&fecha_sorteo={fecha}",
-            f"{base}/servicios/buscadorSorteos?game_id=LAQU&celebrados=false&fechaInicioInclusiva={fecha}&fechaFinInclusiva={fecha}",
-            f"{base}/servicios/infoSorteo?id_sorteo={ids}",
-            f"{base}/servicios/sorteo?id_sorteo={ids}",
-            f"{base}/servicios/partidos?id_sorteo={ids}",
-            f"{base}/servicios/partidosQuiniela?id_sorteo={ids}",
-        ]
-    urls += [
-        f"{base}/servicios/buscadorSorteos?game_id=LAQU&celebrados=true"
-        f"&fechaInicioInclusiva={f(hoy - timedelta(days=10))}&fechaFinInclusiva={f(hoy)}",
-        f"{base}/es/la-quiniela",
-    ]
-    for u in urls[1:]:
-        codigo, texto = lae_mod.probar(u)
-        if u.endswith("/es/la-quiniela"):   # página HTML: solo enseñamos si menciona partidos
-            texto = f"(HTML, {len(texto)} car.) contiene 'partido': {'partido' in texto.lower()}"
-        print(f"### {codigo}  {u}\n{texto}\n")
+    """Muestra cómo interpreta el bot las próximas jornadas y los resultados de Loterías."""
+    print("=== Próximas jornadas (proximosv3) ===")
+    print(json.dumps(lae_mod.proximos_crudo(), ensure_ascii=False))
+    for j in lae_mod.proximas_jornadas():
+        print(f"\n=== Jornada {j['numero']} · sorteo {j['id_sorteo']} · {j['fecha_sorteo']} ===")
+        print(f"Primer partido: {j['primer_partido']}  ·  cierre oficial: {j['cierre_oficial']}")
+        print(f"Plazo familiar (24 h antes): {j['primer_partido'] - timedelta(hours=24)}")
+        for p in lae_mod.resultados(j["id_sorteo"], j["fecha_sorteo"]) or j["partidos"]:
+            res = f"{p['goles_local']}-{p['goles_visitante']} ({p['signo']})" if p["signo"] else ""
+            print(f"  {p['posicion']:>2}. {p['inicio']:%a %d %H:%M}  {p['local']} - {p['visitante']}  {res}")
+    print("\n=== Ficha cruda de la primera jornada (fechav3) ===")
+    pj = lae_mod.proximas_jornadas()
+    if pj:
+        print(json.dumps(lae_mod.fecha_crudo(pj[0]["fecha_sorteo"]), ensure_ascii=False)[:4000])
 
 
 def main(argv=None):

@@ -90,11 +90,16 @@ alter table pagos          enable row level security;
 --  Funciones internas
 -- ---------------------------------------------------------------------
 
--- Jornada en curso: la más reciente que no está finalizada (o la última si todas lo están)
+-- Jornada que enseña la web: primero la que está abierta para apostar (la más próxima);
+-- si no hay, la que se está jugando; si no, la última terminada.
 create or replace function jornada_actual() returns jornadas
 language sql stable security definer set search_path = public, extensions as $$
   select * from jornadas
-  order by finalizada asc, primer_partido desc
+  order by
+    case when not finalizada and now() < primer_partido - interval '24 hours' then 0
+         when not finalizada then 1 else 2 end,
+    case when not finalizada and now() < primer_partido - interval '24 hours'
+         then extract(epoch from primer_partido) else -extract(epoch from primer_partido) end
   limit 1;
 $$;
 
