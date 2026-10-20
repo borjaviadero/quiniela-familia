@@ -14,8 +14,8 @@ from bot.logica import MADRID, quienes_pagan, elegir_pleno
 from bot.main import Bot
 from bot.telegram import Telegram
 
-EQUIPOS = [("Athletic", "Valencia"), ("Real Madrid", "Sevilla"), ("Betis", "Barcelona"), ("Osasuna", "Getafe"),
-           ("Villarreal", "Alavés"), ("Celta", "Mallorca"), ("Girona", "Rayo"), ("Atlético", "Real Sociedad"),
+EQUIPOS = [("Athletic Club", "Valencia"), ("Real Madrid", "Sevilla"), ("Betis", "Barcelona"), ("Osasuna", "Getafe"),
+           ("Villarreal", "Alavés"), ("Celta", "Mallorca"), ("Girona", "Rayo Vallecano"), ("At. Madrid", "Real Sociedad"),
            ("Espanyol", "Levante"), ("Elche", "Oviedo"), ("Racing", "Deportivo"), ("Eibar", "Zaragoza"),
            ("Sporting", "Málaga"), ("Almería", "Granada"), ("Real Sociedad", "Athletic")]
 # Sábado 24 oct: 1-7 · Domingo 25 oct: 8-15
@@ -47,9 +47,14 @@ class FakeFuente:
             martes = datetime(2026, 10, 27, 21, 0, tzinfo=MADRID)
             out.append({"id_sorteo": "LAQU-15", "numero": 15, "fecha_sorteo": date(2026, 10, 28),
                         "primer_partido": martes,
-                        "partidos": [{"posicion": i + 1, "local": f"Local {i+1}", "visitante": f"Visit {i+1}",
+                        "partidos": [{"posicion": i + 1, "local": EQUIPOS[i][1], "visitante": EQUIPOS[i][0],
                                       "inicio": martes + timedelta(hours=24 * (i % 2)), "goles_local": None,
                                       "goles_visitante": None, "signo": None} for i in range(15)]})
+            out.append({"id_sorteo": "LAQU-16", "numero": 16, "fecha_sorteo": date(2026, 10, 29),
+                        "primer_partido": martes,   # Copa: no es de Liga, el bot la ignora
+                        "partidos": [{"posicion": i + 1, "local": f"Cd Pueblo {i}", "visitante": EQUIPOS[i][0],
+                                      "inicio": martes, "goles_local": None, "goles_visitante": None,
+                                      "signo": None} for i in range(15)]})
         return out
 
     con_jornada_15 = False
@@ -143,6 +148,7 @@ def main(salida: str):
     j14 = next(j for j in db.jornadas if j["id"] == 14)
     j15 = next(j for j in db.jornadas if j["id"] == 15)
     assert j14["finalizada"] and not j15["finalizada"] and j15["anunciada"]
+    assert not any(j["id"] == 16 for j in db.jornadas), "la jornada de Copa no debe crearse"
     print("Pleno jornada 14:", j14["pleno_jugador_id"], "(por sorteo)" if j14["pleno_por_sorteo"] else "")
     print("Pleno jornada 15:", j15["pleno_jugador_id"], "(por sorteo)" if j15["pleno_por_sorteo"] else "")
     print("Pagan la siguiente:", db.pag[14])

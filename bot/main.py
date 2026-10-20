@@ -22,7 +22,8 @@ from decimal import Decimal
 from . import lae as lae_mod
 from .db import DB
 from .imagen import boleto
-from .logica import (MADRID, dias_con_parte_pendiente, eur, elegir_pleno, jornada_completa,
+from .logica import (MADRID, dias_con_parte_pendiente, es_jornada_de_primera, eur, elegir_pleno,
+                     jornada_completa,
                      nombre_dia, pleno_acertado, quienes_pagan, ranking, _dt)
 from .telegram import Telegram, mencion
 
@@ -81,6 +82,9 @@ class Bot:
                 continue
             temporada = temporada_de(nueva["fecha_sorteo"] or nueva["primer_partido"])
             if self.db.jornada_existe(temporada, nueva["numero"]):
+                continue
+            if not es_jornada_de_primera(nueva["partidos"]):
+                print(f"Jornada {nueva['numero']}: no es de Liga (Copa, Champions…); se omite.")
                 continue
             if nueva["primer_partido"] - timedelta(hours=24) <= self.ahora:
                 print(f"Jornada {nueva['numero']}: publicada demasiado tarde para apostar; se omite.")
@@ -253,6 +257,7 @@ def diagnostico_lae():
         print(f"\n=== Jornada {j['numero']} · sorteo {j['id_sorteo']} · {j['fecha_sorteo']} ===")
         print(f"Primer partido: {j['primer_partido']}  ·  cierre oficial: {j['cierre_oficial']}")
         print(f"Plazo familiar (24 h antes): {j['primer_partido'] - timedelta(hours=24)}")
+        print(f"¿Es de Liga (Primera)?: {'sí' if es_jornada_de_primera(j['partidos']) else 'NO, se omite'}")
         for p in lae_mod.resultados(j["id_sorteo"], j["fecha_sorteo"]) or j["partidos"]:
             res = f"{p['goles_local']}-{p['goles_visitante']} ({p['signo']})" if p["signo"] else ""
             print(f"  {p['posicion']:>2}. {p['inicio']:%a %d %H:%M}  {p['local']} - {p['visitante']}  {res}")

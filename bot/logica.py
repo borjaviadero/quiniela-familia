@@ -14,6 +14,32 @@ PRECIO_BOLETO = Decimal("3.75")
 DURACION_PARTIDO = timedelta(hours=2)
 
 
+# Equipos de Primera División 2026-27 tal como los escribe Loterías (sin el "(m)").
+# Revisar al empezar cada temporada (ascensos y descensos). No hace falta que esté
+# completa: basta con que la mayoría de partidos de Liga se reconozcan.
+EQUIPOS_PRIMERA = {
+    "Athletic Club", "At. Madrid", "Barcelona", "Betis", "Celta", "Deportivo", "Elche",
+    "Espanyol", "Getafe", "Levante", "Osasuna", "Rayo Vallecano", "Real Madrid",
+    "Real Sociedad", "Sevilla", "Valencia", "Villarreal",
+}
+MIN_PARTIDOS_PRIMERA = 5
+
+
+def _norm(nombre: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKD", nombre).encode("ascii", "ignore").decode().lower()
+    return " ".join(s.replace(".", ". ").split())
+
+
+def es_jornada_de_primera(partidos: list[dict]) -> bool:
+    """La quiniela de Liga lleva varios partidos de Primera entre sí. Las de Champions,
+    Copa, etc. tienen como mucho un equipo de Primera por partido."""
+    primera = {_norm(e) for e in EQUIPOS_PRIMERA}
+    n = sum(1 for p in partidos if p["posicion"] <= 14
+            and _norm(p["local"]) in primera and _norm(p["visitante"]) in primera)
+    return n >= MIN_PARTIDOS_PRIMERA
+
+
 def signo_de_marcador(goles_local: int, goles_visitante: int) -> str:
     if goles_local > goles_visitante:
         return "1"
