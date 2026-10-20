@@ -1,4 +1,4 @@
-"""Acceso a Supabase vía su API REST (PostgREST) con la service_role key."""
+"""Supabase access through its REST API (PostgREST), using the service_role key."""
 from __future__ import annotations
 
 import json
@@ -12,82 +12,82 @@ class DB:
     def __init__(self, url: str | None = None, key: str | None = None):
         self.url = (url or os.environ["SUPABASE_URL"]).rstrip("/") + "/rest/v1"
         key = key or os.environ["SUPABASE_SERVICE_KEY"]
-        self.h = {"apikey": key, "Authorization": f"Bearer {key}",
-                  "Content-Type": "application/json", "Prefer": "return=representation"}
+        self.headers = {"apikey": key, "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json", "Prefer": "return=representation"}
 
-    def _req(self, metodo: str, tabla: str, params: dict | None = None, cuerpo=None, prefer: str | None = None):
-        h = dict(self.h)
+    def request(self, method: str, table: str, params: dict | None = None, body=None, prefer: str | None = None):
+        headers = dict(self.headers)
         if prefer:
-            h["Prefer"] = prefer
-        r = requests.request(metodo, f"{self.url}/{tabla}", params=params, headers=h, timeout=30,
-                             data=json.dumps(cuerpo, default=_json) if cuerpo is not None else None)
+            headers["Prefer"] = prefer
+        r = requests.request(method, f"{self.url}/{table}", params=params, headers=headers, timeout=30,
+                             data=json.dumps(body, default=_json) if body is not None else None)
         if r.status_code >= 400:
-            raise RuntimeError(f"Supabase {metodo} {tabla}: {r.status_code} {r.text}")
+            raise RuntimeError(f"Supabase {method} {table}: {r.status_code} {r.text}")
         return r.json() if r.text else None
 
-    # ---- lecturas ----------------------------------------------------
-    def jugadores(self) -> list[dict]:
-        return self._req("GET", "jugadores", {"select": "id,nombre,telegram_user_id", "order": "id"})
+    # ---- reads -------------------------------------------------------
+    def players(self) -> list[dict]:
+        return self.request("GET", "players", {"select": "id,name,telegram_user_id", "order": "id"})
 
-    def jornadas_abiertas(self) -> list[dict]:
-        return self._req("GET", "jornadas", {"finalizada": "eq.false", "order": "primer_partido.asc"})
+    def open_matchdays(self) -> list[dict]:
+        return self.request("GET", "matchdays", {"finished": "eq.false", "order": "first_kickoff.asc"})
 
-    def jornada_anterior(self, primer_partido) -> dict | None:
-        """La jornada inmediatamente anterior (por fecha del primer partido), acabada o no."""
-        r = self._req("GET", "jornadas", {"primer_partido": f"lt.{_json(primer_partido)}",
-                                          "order": "primer_partido.desc", "limit": 1})
+    def previous_matchday(self, first_kickoff) -> dict | None:
+        """The matchday right before the given kickoff, finished or not."""
+        r = self.request("GET", "matchdays", {"first_kickoff": f"lt.{_json(first_kickoff)}",
+                                              "order": "first_kickoff.desc", "limit": 1})
         return r[0] if r else None
 
-    def ultima_finalizada(self) -> dict | None:
-        r = self._req("GET", "jornadas", {"finalizada": "eq.true", "order": "primer_partido.desc", "limit": 1})
+    def last_finished(self) -> dict | None:
+        r = self.request("GET", "matchdays", {"finished": "eq.true", "order": "first_kickoff.desc", "limit": 1})
         return r[0] if r else None
 
-    def jornadas_sin_premios(self) -> list[dict]:
-        return self._req("GET", "jornadas", {"finalizada": "eq.true", "premios_publicados": "eq.false",
-                                             "order": "primer_partido.asc"})
+    def matchdays_without_prizes(self) -> list[dict]:
+        return self.request("GET", "matchdays", {"finished": "eq.true", "prizes_published": "eq.false",
+                                                 "order": "first_kickoff.asc"})
 
-    def jornada_existe(self, temporada: str, numero: int) -> bool:
-        return bool(self._req("GET", "jornadas", {"temporada": f"eq.{temporada}", "numero": f"eq.{numero}",
-                                                  "select": "id"}))
+    def matchday_exists(self, season: str, number: int) -> bool:
+        return bool(self.request("GET", "matchdays", {"season": f"eq.{season}", "number": f"eq.{number}",
+                                                      "select": "id"}))
 
-    def partidos(self, jornada_id: int) -> list[dict]:
-        return self._req("GET", "partidos", {"jornada_id": f"eq.{jornada_id}", "order": "posicion"})
+    def matches(self, matchday_id: int) -> list[dict]:
+        return self.request("GET", "matches", {"matchday_id": f"eq.{matchday_id}", "order": "position"})
 
-    def apuestas(self, jornada_id: int) -> dict[int, dict]:
-        filas = self._req("GET", "apuestas", {"jornada_id": f"eq.{jornada_id}"})
-        return {f["jugador_id"]: f for f in filas}
+    def picks(self, matchday_id: int) -> dict[int, dict]:
+        rows = self.request("GET", "picks", {"matchday_id": f"eq.{matchday_id}"})
+        return {r["player_id"]: r for r in rows}
 
-    def partes_enviados(self, jornada_id: int) -> set[date]:
-        filas = self._req("GET", "partes_diarios", {"jornada_id": f"eq.{jornada_id}", "select": "dia"})
-        return {date.fromisoformat(f["dia"]) for f in filas}
+    def reported_days(self, matchday_id: int) -> set[date]:
+        rows = self.request("GET", "daily_reports", {"matchday_id": f"eq.{matchday_id}", "select": "day"})
+        return {date.fromisoformat(r["day"]) for r in rows}
 
-    def pagos(self, jornada_id: int) -> list[dict]:
-        return self._req("GET", "pagos", {"jornada_id": f"eq.{jornada_id}", "order": "jugador_id"})
+    def payments(self, matchday_id: int) -> list[dict]:
+        return self.request("GET", "payments", {"matchday_id": f"eq.{matchday_id}", "order": "player_id"})
 
-    # ---- escrituras --------------------------------------------------
-    def crear_jornada(self, jornada: dict, partidos: list[dict]) -> dict:
-        j = self._req("POST", "jornadas", cuerpo=jornada)[0]
-        self._req("POST", "partidos", cuerpo=[{**p, "jornada_id": j["id"]} for p in partidos])
-        return j
+    # ---- writes ------------------------------------------------------
+    def create_matchday(self, matchday: dict, matches: list[dict]) -> dict:
+        md = self.request("POST", "matchdays", body=matchday)[0]
+        self.request("POST", "matches", body=[{**m, "matchday_id": md["id"]} for m in matches])
+        return md
 
-    def actualizar_jornada(self, jornada_id: int, **campos):
-        self._req("PATCH", "jornadas", {"id": f"eq.{jornada_id}"}, campos)
+    def update_matchday(self, matchday_id: int, **fields):
+        self.request("PATCH", "matchdays", {"id": f"eq.{matchday_id}"}, fields)
 
-    def guardar_resultados(self, jornada_id: int, partidos: list[dict]):
-        filas = [{"jornada_id": jornada_id, **{k: p[k] for k in
-                  ("posicion", "local", "visitante", "inicio", "goles_local", "goles_visitante", "signo")}}
-                 for p in partidos]
-        self._req("POST", "partidos", {"on_conflict": "jornada_id,posicion"}, filas,
-                  prefer="resolution=merge-duplicates,return=minimal")
+    def save_matches(self, matchday_id: int, matches: list[dict]):
+        rows = [{"matchday_id": matchday_id, **{k: m[k] for k in
+                 ("position", "home", "away", "kickoff", "home_goals", "away_goals", "sign")}}
+                for m in matches]
+        self.request("POST", "matches", {"on_conflict": "matchday_id,position"}, rows,
+                     prefer="resolution=merge-duplicates,return=minimal")
 
-    def registrar_parte(self, jornada_id: int, dia: date):
-        self._req("POST", "partes_diarios", cuerpo={"jornada_id": jornada_id, "dia": dia.isoformat()},
-                  prefer="return=minimal")
+    def mark_reported(self, matchday_id: int, day: date):
+        self.request("POST", "daily_reports", body={"matchday_id": matchday_id, "day": day.isoformat()},
+                     prefer="return=minimal")
 
-    def guardar_pagos(self, jornada_id: int, importes: dict[int, object]):
-        self._req("POST", "pagos", {"on_conflict": "jornada_id,jugador_id"},
-                  [{"jornada_id": jornada_id, "jugador_id": j, "importe": str(v)} for j, v in importes.items()],
-                  prefer="resolution=merge-duplicates,return=minimal")
+    def save_payments(self, matchday_id: int, amounts: dict[int, object]):
+        self.request("POST", "payments", {"on_conflict": "matchday_id,player_id"},
+                     [{"matchday_id": matchday_id, "player_id": p, "amount": str(a)} for p, a in amounts.items()],
+                     prefer="resolution=merge-duplicates,return=minimal")
 
 
 def _json(o):
