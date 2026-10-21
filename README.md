@@ -94,11 +94,19 @@ The bot runs Tuesday–Thursday every hour and Friday–Monday every 20 minutes.
 - Only **LaLiga** ones: at least 5 matches between two top-flight teams. Champions League,
   Copa del Rey, etc. are skipped. Women's teams are shown with **(F)** and never count.
 
+**When a new matchday is announced**
+- Players bet on one matchday at a time, and the Pleno and who pays come from the previous
+  one. So if the lottery publishes a matchday early, the bot waits: never while an earlier
+  matchday is still open for betting, and, if the earlier one will finish before the new one
+  closes, until it has finished (unless that would leave less than 48 h to bet).
+- Example: next weekend's matchday published on Wednesday is announced on Monday night,
+  right after this weekend's matchday ends, with the correct Pleno player and payer.
+
 **Overlapping matchdays**
-- If a matchday (e.g. a midweek LaLiga round) is published while another is still being
-  played, both are handled independently: own announcement, deadline, columns, reports and
-  ticket. The announcement says so explicitly, and the web app always shows the matchday
-  open for betting.
+- A midweek matchday may have to be announced while the weekend one is still being played
+  (its deadline comes first). Both are handled independently: own announcement, deadline,
+  columns, reports and ticket; the announcement says so explicitly, and the web app always
+  shows the matchday open for betting.
 
 **Postponements and rescheduling**
 - Until kickoff, fixtures are re-read on every run. If the **first kickoff** moves while

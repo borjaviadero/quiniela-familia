@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 from . import lae, messages as msg, teams
 from .db import DB
-from .rules import (MADRID, column_prizes, days_pending_report, hits_by_player, is_league_matchday,
+from .rules import (MADRID, MATCH_DURATION, column_prizes, days_pending_report, hits_by_player, is_league_matchday,
                     matchday_complete, pick_pleno_player, pleno_hit, season_of, to_date, to_datetime,
                     who_pays)
 from .telegram import Telegram
@@ -34,6 +34,7 @@ WEB_LINK = f"{WEB_URL}#k={_FAMILY_KEY}" if WEB_URL and _FAMILY_KEY else WEB_URL
 BETTING_CLOSES_BEFORE = timedelta(hours=24)   # picks can be edited until 24 h before the first kickoff
 REMINDER_BEFORE = timedelta(hours=48)         # reminder to whoever is missing, 48 h before
 PRIZE_WAIT = timedelta(days=10)               # stop waiting for the official prize breakdown after this
+MIN_BETTING_WINDOW = timedelta(hours=48)      # never wait for the previous matchday if less is left
 
 
 class Bot:
@@ -72,7 +73,30 @@ class Bot:
             if new["first_kickoff"] - BETTING_CLOSES_BEFORE <= self.now:
                 print(f"Matchday {new['number']}: published too late to bet on; skipped.")
                 continue
+            if reason := self.must_wait(new):
+                print(f"Matchday {new['number']}: waiting, {reason}.")
+                continue
             self.create_matchday(new, season)
+
+    def must_wait(self, new: dict) -> str | None:
+        """Decides whether a new matchday should be announced later. Players bet on one
+        matchday at a time, and the Pleno and who pays come from the previous matchday,
+        so the bot waits for it when there is time:
+          1. while an earlier matchday is still open for betting, always wait;
+          2. if an earlier matchday will finish before the new one closes, wait until it
+             finishes, unless less than MIN_BETTING_WINDOW would be left to bet.
+        Returns the reason to wait, or None to announce now."""
+        new_close = new["first_kickoff"] - BETTING_CLOSES_BEFORE
+        for md in self.db.open_matchdays():
+            if to_datetime(md["first_kickoff"]) >= new["first_kickoff"]:
+                continue
+            if self.now < to_datetime(md["first_kickoff"]) - BETTING_CLOSES_BEFORE:
+                return f"matchday {md['number']} is still open for betting"
+            kickoffs = [to_datetime(m["kickoff"]) for m in self.db.matches(md["id"]) if m.get("kickoff")]
+            expected_end = max(kickoffs) + MATCH_DURATION if kickoffs else None
+            if expected_end and expected_end < new_close and self.now < new_close - MIN_BETTING_WINDOW:
+                return f"matchday {md['number']} finishes first"
+        return None
 
     def top_flight_teams(self) -> list[str]:
         names = teams.from_espn()

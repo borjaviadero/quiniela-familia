@@ -65,7 +65,19 @@ class FakeSource:
                         "matches": [{"position": i + 1, "home": f"Cd Pueblo {i}", "away": FIXTURES[i][0],
                                      "kickoff": tuesday, "home_goals": None, "away_goals": None,
                                      "sign": None} for i in range(15)]})
+        if self.with_next_weekend:
+            out.append(self.next_weekend())
         return out
+
+    with_next_weekend = False
+
+    def next_weekend(self):
+        """A LaLiga matchday for the following weekend, published early (real case: matchday 18)."""
+        sat = SAT + timedelta(days=7)
+        return {"draw_id": "LAQU-18", "number": 18, "draw_date": date(2026, 11, 1), "first_kickoff": sat,
+                "matches": [{"position": i + 1, "home": FIXTURES[i][0], "away": FIXTURES[i][1],
+                             "kickoff": sat + timedelta(hours=i % 5), "home_goals": None,
+                             "away_goals": None, "sign": None} for i in range(15)]}
 
     def payouts(self, draw_id, draw_date):
         if draw_id != "LAQU-14" or not self.played_until or self.played_until < datetime(2026, 10, 26, tzinfo=MADRID):
@@ -74,6 +86,8 @@ class FakeSource:
                 12: Decimal("12.76"), 11: Decimal("2.22"), 10: Decimal("0"), 9: Decimal("0")}
 
     def matches(self, draw_id, draw_date):
+        if draw_id == "LAQU-18":
+            return self.next_weekend()["matches"]
         return next((m["matches"] for m in self.upcoming_matchdays() if m["draw_id"] == draw_id), None)
 
     def results(self, draw_id, draw_date):
@@ -197,5 +211,41 @@ def main(output_dir: str):
     print("OK")
 
 
+
+def early_next_matchday(output_dir: str):
+    """Next weekend's matchday is published while this one is still open (real case:
+    matchday 18 published on Wednesday). It must wait until this one has finished, so that
+    its Pleno goes to this matchday's best player and the announcement says who pays."""
+    db, source = FakeDB(), FakeSource()
+    source.with_next_weekend = True
+    tg = Telegram(dry_run=output_dir)
+    rng = random.Random(7)
+
+    def tick(at: datetime):
+        db.now = at
+        Bot(db, tg, source, now=at, rng=rng).tick()
+
+    tick(datetime(2026, 10, 20, 11, 0, tzinfo=MADRID))
+    db.signs[14] = {1: "11221X111X11X1", 2: "1X2111X1121X21", 3: "1X1X1X1X1X1X1X",
+                    4: "112X1X1X1X1121", 5: "11211X1X1X1121"}
+    tick(datetime(2026, 10, 21, 12, 0, tzinfo=MADRID))             # 18 published, 14 open
+    assert not any(m["number"] == 18 for m in db.matchdays), "must wait while 14 is open"
+    source.played_until = datetime(2026, 10, 25, 0, 30, tzinfo=MADRID)
+    tick(datetime(2026, 10, 25, 0, 30, tzinfo=MADRID))             # 14 in play
+    assert not any(m["number"] == 18 for m in db.matchdays), "must wait for 14 to finish"
+    source.played_until = datetime(2026, 10, 26, 2, 0, tzinfo=MADRID)
+    tick(datetime(2026, 10, 26, 2, 0, tzinfo=MADRID))              # 14 finishes
+    tick(datetime(2026, 10, 26, 3, 0, tzinfo=MADRID))              # next run announces 18
+    md18 = next(m for m in db.matchdays if m["number"] == 18)
+    assert md18["announced"]
+    assert md18["pleno_player_id"] == 2 and not md18["pleno_by_draw"], "Pleno: 14's best player (Rosana)"
+    announcement = sorted(f for f in __import__("os").listdir(output_dir) if f.endswith("_photo.txt"))[-1]
+    text = open(f"{output_dir}/{announcement}", encoding="utf-8").read()
+    assert "jornada 18" in text and "Joseba</b> debe abonarla" in text and "Ojo" not in text, text
+    print("Early matchday 18: waited for 14, Pleno to its winner, payer announced. OK")
+
+
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "simulation_output")
+    out = sys.argv[1] if len(sys.argv) > 1 else "simulation_output"
+    main(out)
+    early_next_matchday(out + "-early-matchday")
