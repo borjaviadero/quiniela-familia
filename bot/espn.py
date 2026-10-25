@@ -11,7 +11,7 @@ kickoff agrees and at least one of the two teams is recognised (spellings differ
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import requests
 
@@ -32,34 +32,45 @@ def _team_tokens(team: dict) -> frozenset[str]:
 
 
 def finished_games(start: datetime, end: datetime) -> list[dict]:
-    """Finished games between two dates: [{home, away (token sets), kickoff, home_goals, away_goals}]."""
-    dates = f"{start.astimezone(MADRID):%Y%m%d}-{end.astimezone(MADRID):%Y%m%d}"
+    """Finished games between two dates: [{home, away (token sets), kickoff, home_goals, away_goals}].
+    The scoreboard is read one day at a time (date ranges are rejected with HTTP 400)."""
+    games, day = {}, start.astimezone(MADRID).date()
+    while day <= end.astimezone(MADRID).date():
+        for league in LEAGUES:
+            for game in _finished_on(league, day):
+                games[game.pop("id")] = game      # a game may show up on two adjacent days
+        day += timedelta(days=1)
+    return list(games.values())
+
+
+def _finished_on(league: str, day: date) -> list[dict]:
+    try:
+        r = requests.get(SCOREBOARD_URL.format(league=league), params={"dates": f"{day:%Y%m%d}"}, timeout=20)
+        r.raise_for_status()
+        events = r.json().get("events", [])
+    except Exception as e:  # noqa: BLE001
+        print(f"Could not read the ESPN scoreboard ({league}, {day}): {e}")
+        return []
     games = []
-    for league in LEAGUES:
+    for event in events:
         try:
-            r = requests.get(SCOREBOARD_URL.format(league=league),
-                             params={"dates": dates, "limit": 200}, timeout=20)
-            r.raise_for_status()
-            events = r.json().get("events", [])
-        except Exception as e:  # noqa: BLE001
-            print(f"Could not read the ESPN scoreboard ({league}): {e}")
-            continue
-        for event in events:
-            try:
-                competition = event["competitions"][0]
-                status = (competition.get("status") or event.get("status") or {}).get("type", {})
-                if not status.get("completed") or status.get("state") != "post":
-                    continue
-                sides = {c["homeAway"]: c for c in competition["competitors"]}
-                games.append({
-                    "home": _team_tokens(sides["home"]["team"]),
-                    "away": _team_tokens(sides["away"]["team"]),
-                    "kickoff": datetime.fromisoformat(event["date"].replace("Z", "+00:00")),
-                    "home_goals": int(sides["home"]["score"]),
-                    "away_goals": int(sides["away"]["score"]),
-                })
-            except (KeyError, IndexError, TypeError, ValueError):
+            competition = event["competitions"][0]
+            status = (competition.get("status") or event.get("status") or {}).get("type", {})
+            if not status.get("completed") or status.get("state") != "post":
                 continue
+            sides = {c["homeAway"]: c for c in competition["competitors"]}
+            score = lambda side: int(sides[side]["score"]["value"] if isinstance(sides[side]["score"], dict)
+                                     else sides[side]["score"])
+            games.append({
+                "id": event.get("id") or f"{league}-{event['date']}-{len(games)}",
+                "home": _team_tokens(sides["home"]["team"]),
+                "away": _team_tokens(sides["away"]["team"]),
+                "kickoff": datetime.fromisoformat(event["date"].replace("Z", "+00:00")),
+                "home_goals": score("home"),
+                "away_goals": score("away"),
+            })
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
     return games
 
 
