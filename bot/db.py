@@ -29,6 +29,10 @@ class DB:
     def players(self) -> list[dict]:
         return self.request("GET", "players", {"select": "id,name,telegram_user_id", "order": "id"})
 
+    def matchday(self, matchday_id: int) -> dict | None:
+        r = self.request("GET", "matchdays", {"id": f"eq.{matchday_id}"})
+        return r[0] if r else None
+
     def open_matchdays(self) -> list[dict]:
         return self.request("GET", "matchdays", {"finished": "eq.false", "order": "first_kickoff.asc"})
 
@@ -64,7 +68,24 @@ class DB:
     def payments(self, matchday_id: int) -> list[dict]:
         return self.request("GET", "payments", {"matchday_id": f"eq.{matchday_id}", "order": "player_id"})
 
+    def telegram_users(self) -> list[dict]:
+        return self.request("GET", "telegram_users", {"order": "last_seen.desc"})
+
+    def state(self, key: str) -> str | None:
+        r = self.request("GET", "bot_state", {"key": f"eq.{key}", "select": "value"})
+        return r[0]["value"] if r else None
+
     # ---- writes ------------------------------------------------------
+    def set_state(self, key: str, value: str):
+        self.request("POST", "bot_state", {"on_conflict": "key"}, {"key": key, "value": value},
+                     prefer="resolution=merge-duplicates,return=minimal")
+
+    def seen_telegram_user(self, user: dict):
+        self.request("POST", "telegram_users", {"on_conflict": "user_id"},
+                     {"user_id": user["id"], "first_name": user.get("first_name"),
+                      "username": user.get("username"), "last_seen": datetime.now().astimezone()},
+                     prefer="resolution=merge-duplicates,return=minimal")
+
     def create_matchday(self, matchday: dict, matches: list[dict]) -> dict:
         md = self.request("POST", "matchdays", body=matchday)[0]
         self.request("POST", "matches", body=[{**m, "matchday_id": md["id"]} for m in matches])

@@ -35,8 +35,10 @@ Right: the betting web app. Test data.</sub></p>
   a built-in `diagnose` command.
 - **Self-maintaining rules**: the LaLiga team list is pulled from ESPN every season, kickoff
   changes move the betting deadline automatically, and postponed matches are handled.
-- **Two data sources for results**: the lottery only publishes results once the whole draw
-  is settled, so live scores come from ESPN and the official results always take precedence.
+- **Interactive without a server**: Telegram button presses (closing betting early) are
+  collected by polling on each scheduled run, with the processed update stored in the database.
+- **Two data sources for results**: the lottery can publish results hours late, so final
+  scores also come from ESPN; the official results always take precedence.
 - **Secure by default**: the public website only works with a *family key* that travels in
   the link posted to the private Telegram group (never in the repository), plus a per-player
   PIN hashed with bcrypt and rate-limited; Row Level Security with the site restricted to
@@ -70,15 +72,19 @@ Right: the betting web app. Test data.</sub></p>
 1. **LAE publishes a LaLiga Quiniela** → the bot creates the matchday, chooses who fills in
    the *Pleno al 15* and posts the fixtures image with a *Hacer mi quiniela* button.
 2. **Each player submits a column** on the web app with their PIN, and can change it until
-   **24 h before the first kickoff**.
+   betting closes: **24 h before the first kickoff**, or earlier (step 4).
 3. **48 h before the first kickoff** → reminder in the group, mentioning whoever is missing.
-4. **When all five are in** (or betting closes) → image with every column, ready to be
-   stamped at the lottery shop, and who pays for it.
-5. **After the last match of each day** → image with hits (green), misses (red) and the leader.
-   Results come from ESPN as soon as each match ends; the lottery's official ones replace them
-   when the draw is settled.
-6. **When the matchday ends** → final image, everyone's hits and who pays the next ticket.
-7. **When LAE publishes the prize breakdown** → how much each winning column gets, if any.
+4. **When all five are in** → the bot asks whoever pays the ticket, with *Yes/No* buttons,
+   whether to close betting now. *Yes* closes it at once; *No* (or no answer) keeps it open,
+   and the question is asked again if someone changes their column. Only the payers can
+   answer.
+5. **When betting closes** → image with every column, ready to be stamped at the lottery
+   shop, and who pays for it.
+6. **After the last match of each day** → image with hits (green), misses (red) and the leader.
+   If the lottery has not published a result yet, ESPN's final score is used; the official
+   one replaces it as soon as it appears.
+7. **When the matchday ends** → final image, everyone's hits and who pays the next ticket.
+8. **When LAE publishes the prize breakdown** → how much each winning column gets, if any.
 
 The bot runs every 10 minutes (see [Reliable schedule](#6-reliable-schedule)).
 
@@ -150,9 +156,9 @@ The bot runs every 10 minutes (see [Reliable schedule](#6-reliable-schedule)).
      too**, it cannot be recovered from GitHub)
    - Variable: `WEB_URL` (the GitHub Pages address from step 4). The family key is added
      to the link by the bot; keep it a *secret*, because Actions logs are public.
-3. To find the chat and user ids, open `https://api.telegram.org/bot<TOKEN>/getUpdates`
-   after writing in the group (or *Actions → Bot → Run workflow → telegram-ids*). The group
-   id is negative. Store each player's id:
+3. To find the chat and user ids, have everyone write in the group and run *Actions → Bot →
+   Run workflow → telegram-ids*: it lists everyone the bot has seen writing (recorded on every
+   run, so it works days later too). The group id is negative. Store each player's id:
    `update players set telegram_user_id = 123456789 where name = 'Rosana';`
 
 ### 4. Web app

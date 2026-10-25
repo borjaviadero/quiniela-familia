@@ -5,6 +5,7 @@ stays in English and the copy can be reviewed or translated in one place.
 """
 from __future__ import annotations
 
+import html
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -97,6 +98,46 @@ def picks_published(number: int, payments: list[dict], players: dict[int, dict],
     if missing:
         lines.append(f"Sin columna: {join_names([p['name'] for p in missing])} (cuenta como 0 aciertos).")
     return "\n".join(lines)
+
+
+CLOSE_YES = "✅ Sí, la voy a echar"
+CLOSE_NO = "⏳ No, todavía no"
+
+
+def close_question(number: int, payers: list[dict], close: datetime) -> str:
+    """Asked once everyone is in: whoever pays can close betting now."""
+    if payers:
+        many = len(payers) > 1
+        ask = (f"{join_names([mention(p) for p in payers])}, ¿cerramos ya las apuestas para que "
+               f"{'podáis' if many else 'puedas'} echarla en la administración?")
+    else:
+        ask = "¿Cerramos ya las apuestas para echarla en la administración?"
+    return (f"✅ <b>Todo el mundo ha rellenado la jornada {number}.</b>\n{ask}\n"
+            f"Si no, se pueden cambiar las columnas hasta el {when(close)}.\n"
+            f"<i>El bot tarda unos minutos en responder.</i>")
+
+
+def closed_early(number: int, name: str) -> str:
+    return (f"🔒 <b>{html.escape(name)}</b> ha cerrado las apuestas de la jornada {number}. "
+            f"Ya no se pueden cambiar las columnas.")
+
+
+def kept_open(number: int, name: str, close: datetime) -> str:
+    return (f"⏳ <b>{html.escape(name)}</b> prefiere esperar. Las columnas de la jornada {number} "
+            f"se pueden cambiar hasta el {when(close)}.")
+
+
+def close_question_outdated(number: int) -> str:
+    return f"✏️ Alguien ha cambiado su columna de la jornada {number}, así que vuelvo a preguntar."
+
+
+def close_question_expired(number: int) -> str:
+    return f"🔒 Las apuestas de la jornada {number} ya están cerradas."
+
+
+def only_payers_can_close(payers: list[dict]) -> str:
+    names = join_names([p["name"] for p in payers])
+    return f"Solo {names} {'pueden' if len(payers) > 1 else 'puede'} cerrar las apuestas."
 
 
 def daily_report(number: int, day: date, played: int, leaders: list[str], best: int,

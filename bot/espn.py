@@ -1,9 +1,9 @@
 """Live results from ESPN's public scoreboard API (no key or sign-up).
 
-Loterías y Apuestas only publishes results once the whole draw is settled, so the daily
-progress reports would never be sent while a matchday is being played. ESPN has every
-final score of LaLiga (Primera and Segunda) within minutes, so it fills in the matches
-LAE has not published yet. LAE's official results always take precedence.
+Loterías y Apuestas can take hours to publish a result, which would delay the daily
+progress reports. ESPN has every final score of LaLiga (Primera and Segunda) within
+minutes, so it fills in the matches LAE has not published yet. LAE's official results
+always take precedence.
 
 Names are matched by their meaningful words, as in bot.teams. A game matches when the
 kickoff agrees and at least one of the two teams is recognised (spellings differ, e.g.

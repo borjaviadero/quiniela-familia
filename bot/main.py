@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import random
+import re
 import sys
 from datetime import datetime, timedelta
 
@@ -37,6 +38,15 @@ PRIZE_WAIT = timedelta(days=10)               # stop waiting for the official pr
 MIN_BETTING_WINDOW = timedelta(hours=48)      # never wait for the previous matchday if less is left
 
 
+def betting_close(md: dict) -> datetime:
+    """24 h before the first kickoff, or earlier if whoever pays closed betting from Telegram
+    once everyone was in (same rule as betting_close() in the database)."""
+    close = to_datetime(md["first_kickoff"]) - BETTING_CLOSES_BEFORE
+    if md.get("closed_early_at"):
+        close = min(close, to_datetime(md["closed_early_at"]))
+    return close
+
+
 class Bot:
     def __init__(self, db: DB, tg: Telegram, source=lae, now: datetime | None = None,
                  rng: random.Random | None = None, live=espn):
@@ -48,6 +58,7 @@ class Bot:
 
     # ------------------------------------------------------------------
     def tick(self):
+        self.handle_telegram_updates()
         self.find_new_matchdays()
         open_matchdays = self.db.open_matchdays()
         if not open_matchdays:
@@ -90,7 +101,7 @@ class Bot:
         for md in self.db.open_matchdays():
             if to_datetime(md["first_kickoff"]) >= new["first_kickoff"]:
                 continue
-            if self.now < to_datetime(md["first_kickoff"]) - BETTING_CLOSES_BEFORE:
+            if self.now < betting_close(md):
                 return f"matchday {md['number']} is still open for betting"
             kickoffs = [to_datetime(m["kickoff"]) for m in self.db.matches(md["id"]) if m.get("kickoff")]
             expected_end = max(kickoffs) + MATCH_DURATION if kickoffs else None
@@ -133,7 +144,7 @@ class Bot:
         if self.now < to_datetime(md["first_kickoff"]):
             md = self.refresh_fixtures(md)
         first_kickoff = to_datetime(md["first_kickoff"])
-        close = first_kickoff - BETTING_CLOSES_BEFORE
+        close = betting_close(md)
         remind_at = first_kickoff - REMINDER_BEFORE
 
         if not md["announced"]:
@@ -150,9 +161,14 @@ class Bot:
                 self.tg.send_message(msg.reminder(md["number"], missing, close), msg.PICK_BUTTON, WEB_LINK)
             self.db.update_matchday(md["id"], reminder_sent=True)
 
-        if not md["picks_published"] and (not missing or self.now >= close):
-            self.publish_picks(md, picks, missing)
-            self.db.update_matchday(md["id"], picks_published=True)
+        if not md["picks_published"]:
+            if self.now >= close:
+                self.publish_picks(md, picks, missing)
+                self.db.update_matchday(md["id"], picks_published=True, close_question_message_id=None)
+                if md.get("close_question_message_id"):     # unanswered: remove its buttons
+                    self.tg.edit_message(md["close_question_message_id"], msg.close_question_expired(md["number"]))
+            elif not missing:
+                self.ask_to_close(md, picks, close)
 
         if self.now >= first_kickoff:
             self.track_results(md, picks)
@@ -172,7 +188,7 @@ class Bot:
                                         for m in fixtures])
         kickoffs = [to_datetime(m["kickoff"]) for m in fixtures if m.get("kickoff")]
         old = to_datetime(md["first_kickoff"])
-        if not kickoffs or min(kickoffs) == old or self.now >= old - BETTING_CLOSES_BEFORE:
+        if not kickoffs or min(kickoffs) == old or self.now >= betting_close(md):
             return md          # unchanged, or betting already closed
         new = min(kickoffs)
         self.db.update_matchday(md["id"], first_kickoff=new)
@@ -205,6 +221,80 @@ class Bot:
         midweek = to_datetime(md["first_kickoff"]).astimezone(MADRID).weekday() <= 3   # Monday to Thursday
         return msg.overlap_notice([o["number"] for o in in_play], midweek)
 
+    # ---- early close: everyone is in, whoever pays can close betting from Telegram ----
+    def ask_to_close(self, md: dict, picks: dict, close: datetime):
+        """Asks whoever pays whether to close betting now. Asked again if a column changes."""
+        changes = [to_datetime(p["updated_at"]) for p in picks.values() if p.get("updated_at")]
+        latest = max(changes) if changes else None
+        asked = md.get("close_question_asked_for")
+        if asked and (latest is None or to_datetime(asked) >= latest):
+            return                                      # already asked for these very columns
+        if md.get("close_question_message_id"):
+            self.tg.edit_message(md["close_question_message_id"], msg.close_question_outdated(md["number"]))
+        payers = [self.by_id[p["player_id"]] for p in self.payments_due(md)]
+        message_id = self.tg.send_message(msg.close_question(md["number"], payers, close), choices=[
+            (msg.CLOSE_YES, f"close:{md['id']}:yes"), (msg.CLOSE_NO, f"close:{md['id']}:no")])
+        self.db.update_matchday(md["id"], close_question_message_id=message_id,
+                                close_question_asked_for=latest or self.now)
+
+    def closers(self, md: dict) -> list[dict]:
+        """Players allowed to close betting early: whoever pays this ticket. If any of them has no
+        Telegram id stored (so they could not be recognised), anyone may: [] means no restriction."""
+        payers = [self.by_id[p["player_id"]] for p in self.payments_due(md)]
+        return payers if payers and all(p.get("telegram_user_id") for p in payers) else []
+
+    def handle_telegram_updates(self) -> list[dict]:
+        """Reads new Telegram updates: button presses, and group members (to find their ids)."""
+        try:
+            last = self.db.state("telegram_offset")
+            updates = self.tg.get_updates(int(last) + 1 if last else None)
+        except Exception as e:  # noqa: BLE001
+            print(f"Could not read Telegram updates: {e}")
+            return []
+        for update in updates:
+            try:
+                if press := update.get("callback_query"):
+                    self.handle_button(press)
+                elif (message := update.get("message")) and not message.get("from", {}).get("is_bot", True):
+                    self.db.seen_telegram_user(message["from"])
+            except Exception as e:  # noqa: BLE001
+                print(f"Could not process Telegram update {update.get('update_id')}: {e}")
+        if updates:
+            self.db.set_state("telegram_offset", str(max(u["update_id"] for u in updates)))
+        return updates
+
+    def handle_button(self, press: dict):
+        found = re.fullmatch(r"close:(\d+):(yes|no)", press.get("data") or "")
+        md = self.db.matchday(int(found[1])) if found else None
+        if not md:
+            self.tg.answer_button(press["id"])
+            return
+        close = betting_close(md)
+        message_id = (press.get("message") or {}).get("message_id")
+        if md["finished"] or md["picks_published"] or self.now >= close:
+            self.tg.answer_button(press["id"], msg.close_question_expired(md["number"]))
+            return
+        if message_id != md.get("close_question_message_id"):
+            self.tg.answer_button(press["id"], msg.close_question_outdated(md["number"]))
+            return
+        user = press.get("from") or {}
+        closers = self.closers(md)
+        if closers and user.get("id") not in {p["telegram_user_id"] for p in closers}:
+            self.tg.answer_button(press["id"], msg.only_payers_can_close(closers), alert=True)
+            print(f"Matchday {md['number']}: close button pressed by someone who does not pay")
+            return
+        player = next((p for p in self.players if p.get("telegram_user_id") == user.get("id")), None)
+        name = player["name"] if player else user.get("first_name", "Alguien")
+        if found[2] == "yes":
+            self.db.update_matchday(md["id"], closed_early_at=self.now, close_question_message_id=None)
+            self.tg.edit_message(message_id, msg.closed_early(md["number"], name))
+            print(f"Matchday {md['number']}: betting closed early by {name}")
+        else:
+            self.db.update_matchday(md["id"], close_question_message_id=None)
+            self.tg.edit_message(message_id, msg.kept_open(md["number"], name, close))
+            print(f"Matchday {md['number']}: {name} keeps betting open")
+        self.tg.answer_button(press["id"])
+
     def publish_picks(self, md: dict, picks: dict, missing: list[dict]):
         caption = msg.picks_published(md["number"], self.payments_due(md), self.by_id, missing)
         png = render(title=msg.ticket_title(md["number"]), subtitle=msg.TICKET_SUBTITLE_PICKS,
@@ -224,7 +314,7 @@ class Bot:
         # daily reports group matches by the day they are played
         kickoff_of = {m["position"]: m["kickoff"] for m in stored}
         latest = [{**m, "kickoff": m.get("kickoff") or kickoff_of.get(m["position"])} for m in latest]
-        # LAE only publishes results once the draw is settled; live scores fill the gaps
+        # LAE can publish results hours late; live scores fill the gaps
         latest = self.live.fill_results(latest, self.now)
         known = sum(1 for m in latest if m["sign"])
         print(f"Matchday {md['number']}: {official} of 15 results at LAE, {known} with live scores")
@@ -350,11 +440,16 @@ def main(argv=None):
     elif args.cmd == "diagnose":
         diagnose()
     elif args.cmd == "telegram-ids":
-        for update in Telegram().get_updates():
+        # The bot records everyone who writes in the group, so ids can be looked up any time
+        db = DB()
+        for update in Bot(db, Telegram()).handle_telegram_updates():
             m = update.get("message") or update.get("my_chat_member") or {}
-            chat, sender = m.get("chat", {}), m.get("from", {})
-            print(f"chat_id={chat.get('id')} ({chat.get('title') or chat.get('type')})  "
-                  f"user_id={sender.get('id')} ({sender.get('first_name')})")
+            if chat := m.get("chat"):
+                print(f"chat_id={chat.get('id')} ({chat.get('title') or chat.get('type')})")
+        print("Group members seen by the bot:")
+        for u in db.telegram_users():
+            print(f"  user_id={u['user_id']}  {u.get('first_name') or ''}"
+                  f"{' @' + u['username'] if u.get('username') else ''}  (last message {u['last_seen'][:16]})")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,10 @@ create table if not exists matchdays (
   picks_published   boolean not null default false,
   finished          boolean not null default false,
   prizes_published  boolean not null default false,
+  -- Early close: once everyone is in, whoever pays can close betting from Telegram
+  closed_early_at            timestamptz,
+  close_question_message_id  bigint,          -- the Telegram message with the Yes/No buttons
+  close_question_asked_for   timestamptz,     -- latest pick change when it was asked
   created_at        timestamptz not null default now(),
   unique (season, number)
 );
@@ -82,6 +86,20 @@ create table if not exists family_access (
   key_hash  text not null
 );
 
+-- Telegram users seen in the group (to find each player's telegram_user_id)
+create table if not exists telegram_users (
+  user_id     bigint primary key,
+  first_name  text,
+  username    text,
+  last_seen   timestamptz not null default now()
+);
+
+-- Small key/value store for the bot (e.g. the last Telegram update processed)
+create table if not exists bot_state (
+  key    text primary key,
+  value  text not null
+);
+
 -- ---------------------------------------------------------------------
 --  Security: the website (anon role) cannot touch tables, only the
 --  functions below. The bot uses the service_role key, which bypasses RLS.
@@ -93,21 +111,30 @@ alter table picks         enable row level security;
 alter table daily_reports enable row level security;
 alter table payments      enable row level security;
 alter table family_access enable row level security;
+alter table telegram_users enable row level security;
+alter table bot_state     enable row level security;
 
 -- =====================================================================
 --  Functions
 -- =====================================================================
 
+-- When betting closes: 24 h before the first kickoff, or earlier if whoever pays
+-- closed it from Telegram once everyone was in.
+create or replace function betting_close(md matchdays) returns timestamptz
+language sql stable set search_path = public as $$
+  select least(md.first_kickoff - interval '24 hours', coalesce(md.closed_early_at, 'infinity'::timestamptz));
+$$;
+
 -- Matchday shown on the website: the one open for betting (the nearest), otherwise
 -- the one being played, otherwise the last finished one.
 create or replace function current_matchday() returns matchdays
 language sql stable security definer set search_path = public, extensions as $$
-  select * from matchdays
+  select * from matchdays m
   order by
-    case when not finished and now() < first_kickoff - interval '24 hours' then 0
-         when not finished then 1 else 2 end,
-    case when not finished and now() < first_kickoff - interval '24 hours'
-         then extract(epoch from first_kickoff) else -extract(epoch from first_kickoff) end
+    case when not m.finished and now() < betting_close(m) then 0
+         when not m.finished then 1 else 2 end,
+    case when not m.finished and now() < betting_close(m)
+         then extract(epoch from m.first_kickoff) else -extract(epoch from m.first_kickoff) end
   limit 1;
 $$;
 
@@ -161,14 +188,14 @@ begin
   if md.id is null then return json_build_object('matchday', null); end if;
 
   select count(*) into submitted from picks where matchday_id = md.id;
-  visible := submitted >= (select count(*) from players) or now() >= md.first_kickoff - interval '24 hours';
+  visible := submitted >= (select count(*) from players) or now() >= betting_close(md);
 
   return json_build_object(
     'matchday', json_build_object(
       'id', md.id, 'number', md.number, 'season', md.season,
-      'first_kickoff', md.first_kickoff, 'close', md.first_kickoff - interval '24 hours',
+      'first_kickoff', md.first_kickoff, 'close', betting_close(md),
       'pleno_player_id', md.pleno_player_id, 'finished', md.finished,
-      'open', now() < md.first_kickoff - interval '24 hours'),
+      'open', now() < betting_close(md)),
     'matches', (select coalesce(json_agg(m order by m.position), '[]')
                   from (select position, home, away, kickoff, home_goals, away_goals, sign
                           from matches where matchday_id = md.id) m),
@@ -199,7 +226,7 @@ begin
   return coalesce(r, json_build_object('signs', null));
 end $$;
 
--- Creates or updates the player's own pick. Allowed until 24 h before the first kickoff.
+-- Creates or updates the player's own pick. Allowed until betting closes.
 create or replace function submit_pick(
   p_key text, p_player smallint, p_pin text, p_signs text, p_pleno text default null
 ) returns json
@@ -214,7 +241,7 @@ begin
   if md.id is null or md.finished then
     return json_build_object('error', 'no_open_matchday');
   end if;
-  if now() >= md.first_kickoff - interval '24 hours' then
+  if now() >= betting_close(md) then
     return json_build_object('error', 'betting_closed');
   end if;
 

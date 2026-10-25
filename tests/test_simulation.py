@@ -5,8 +5,9 @@
 Every message and image the bot would send is written to output_dir so it can be
 reviewed. The scenario covers: announcement, 48 h reminder, published picks, a
 daily report, an overlapping midweek matchday, a schedule change, a skipped cup
-matchday, the final result, who pays and the prize message. Two shorter scenarios cover
-a matchday published early and live scores from ESPN while LAE has no results yet.
+matchday, the final result, who pays and the prize message. Shorter scenarios cover a
+matchday published early, live scores from ESPN while LAE has no results yet, kickoff
+times dropped by LAE, and closing betting early from Telegram.
 """
 from __future__ import annotations
 
@@ -93,7 +94,7 @@ class FakeSource:
             return self.next_weekend()["matches"]
         return next((m["matches"] for m in self.upcoming_matchdays() if m["draw_id"] == draw_id), None)
 
-    lae_settles_late = False      # real LAE: no results until the whole draw is settled
+    lae_settles_late = False      # LAE late: no results until the whole draw is settled
     lae_settled = False
 
     def results(self, draw_id, draw_date):
@@ -142,6 +143,7 @@ class FakeDB:
         self._players = [{"id": i + 1, "name": n, "telegram_user_id": None}
                          for i, n in enumerate(["Luis Angel", "Rosana", "Joseba", "Lara", "Borja"])]
         self.matchdays, self.fixtures, self.signs, self.plenos, self.reports, self.pay = [], {}, {}, {}, set(), {}
+        self.changed, self.tg_users, self.bot_state = {}, {}, {}
         # Matchday 13, already finished: Joseba lost; Lara and Borja tied at the top
         self.matchdays.append({"id": 13, "number": 13, "finished": True, "prizes_published": True,
                                "first_kickoff": SAT - timedelta(days=7)})
@@ -151,6 +153,8 @@ class FakeDB:
         self.pay[13] = [{"player_id": 3, "amount": Decimal("3.75")}]
 
     def players(self): return deepcopy(self._players)
+
+    def matchday(self, md_id): return deepcopy(next((m for m in self.matchdays if m["id"] == md_id), None))
 
     def open_matchdays(self):
         return deepcopy(sorted((m for m in self.matchdays if not m["finished"]), key=lambda m: m["first_kickoff"]))
@@ -170,7 +174,8 @@ class FakeDB:
     def matches(self, md_id): return deepcopy(self.fixtures[md_id])
 
     def picks(self, md_id):
-        return {p: {"signs": s, "pleno": self.plenos.get((md_id, p))} for p, s in self.signs.get(md_id, {}).items()}
+        return {p: {"signs": s, "pleno": self.plenos.get((md_id, p)), "updated_at": self.changed.get((md_id, p))}
+                for p, s in self.signs.get(md_id, {}).items()}
 
     def reported_days(self, md_id): return {d for (m, d) in self.reports if m == md_id}
     def payments(self, md_id): return deepcopy(self.pay.get(md_id, []))
@@ -185,6 +190,11 @@ class FakeDB:
     def update_matchday(self, md_id, **fields): next(m for m in self.matchdays if m["id"] == md_id).update(fields)
     def save_matches(self, md_id, fixtures): self.fixtures[md_id] = deepcopy(fixtures)
     def mark_reported(self, md_id, day): self.reports.add((md_id, day))
+
+    def telegram_users(self): return list(self.tg_users.values())
+    def seen_telegram_user(self, user): self.tg_users[user["id"]] = {"user_id": user["id"], **user}
+    def state(self, key): return self.bot_state.get(key)
+    def set_state(self, key, value): self.bot_state[key] = value
 
     def save_payments(self, md_id, amounts):
         self.pay[md_id] = [{"player_id": p, "amount": a} for p, a in sorted(amounts.items())]
@@ -213,7 +223,9 @@ def main(output_dir: str):
     db.signs[14][5] = "11211X1X1X1121"
     db.signs[14][2] = "1X2111X1121X21"   # Rosana: 11 hits -> 4th-category prize
     db.plenos[(14, md14["pleno_player_id"])] = "2-1"
-    tick(datetime(2026, 10, 22, 20, 0, tzinfo=MADRID), "all 5 in: picks published")
+    tick(datetime(2026, 10, 22, 20, 0, tzinfo=MADRID), "all 5 in: asks Joseba whether to close")
+    tick(datetime(2026, 10, 23, 14, 10, tzinfo=MADRID), "nobody answered: closes 24 h before")
+    assert tg.edits[-1][0] == "edit", "the unanswered question loses its buttons"
     source.played_until = datetime(2026, 10, 24, 19, 0, tzinfo=MADRID)
     tick(datetime(2026, 10, 24, 19, 0, tzinfo=MADRID), "Saturday halfway (nothing sent)")
     source.played_until = datetime(2026, 10, 25, 0, 30, tzinfo=MADRID)
@@ -354,9 +366,80 @@ def kickoffs_dropped(output_dir: str):
     print("Kickoffs dropped by LAE: kept, Saturday report sent. OK")
 
 
+def early_close(output_dir: str):
+    """Everyone is in: the bot asks whoever pays (Joseba) whether to close betting now.
+    Only he can answer; "No" keeps betting open; a changed column asks again; "Yes" closes
+    betting at once and publishes the columns."""
+    import bot.teams
+    bot.teams.from_espn = lambda: []
+    db, source = FakeDB(), FakeSource()
+    db._players[2]["telegram_user_id"] = 333          # Joseba
+    db._players[4]["telegram_user_id"] = 555          # Borja
+    tg = Telegram(dry_run=output_dir)
+    rng = random.Random(7)
+    update_id = iter(range(1000, 2000))
+
+    def tick(at: datetime):
+        db.now = at
+        Bot(db, tg, source, now=at, rng=rng, live=NoLiveScores).tick()
+
+    def press(user_id, answer, message_id=None):
+        md = db.matchday(14)
+        tg.incoming.append({"update_id": next(update_id), "callback_query": {
+            "id": f"cb{user_id}{answer}", "from": {"id": user_id, "first_name": "?"}, "data": f"close:14:{answer}",
+            "message": {"message_id": message_id or md["close_question_message_id"]}}})
+
+    tick(datetime(2026, 10, 20, 11, 0, tzinfo=MADRID))
+    tg.incoming.append({"update_id": next(update_id), "message": {
+        "from": {"id": 222, "first_name": "Rosana", "is_bot": False}, "chat": {"id": -1}, "text": "hola"}})
+    when = datetime(2026, 10, 21, 20, 0, tzinfo=MADRID)
+    db.signs[14] = {1: "11221X111X11X1", 2: "1X2111X1121X21", 3: "1X1X1X1X1X1X1X",
+                    4: "112X1X1X1X1121", 5: "11211X1X1X1121"}
+    db.changed.update({(14, p): when for p in range(1, 6)})
+    db.plenos[(14, db.matchday(14)["pleno_player_id"])] = "2-1"
+    tick(when)
+    assert 222 in db.tg_users and db.bot_state["telegram_offset"], "group members are recorded"
+    first_question = db.matchday(14)["close_question_message_id"]
+    assert first_question and not db.matchday(14)["picks_published"], "asks instead of publishing"
+
+    press(555, "yes")                                   # Borja does not pay: not allowed
+    tick(datetime(2026, 10, 21, 20, 10, tzinfo=MADRID))
+    assert tg.edits[-1] == ("answer", "cb555yes", "Solo Joseba puede cerrar las apuestas.")
+    assert not db.matchday(14).get("closed_early_at")
+
+    press(333, "no")                                    # Joseba prefers to wait
+    tick(datetime(2026, 10, 21, 20, 20, tzinfo=MADRID))
+    assert tg.edits[-2][0] == "edit" and "prefiere esperar" in tg.edits[-2][2]
+    assert not db.matchday(14)["picks_published"]
+    tick(datetime(2026, 10, 21, 21, 0, tzinfo=MADRID))  # nothing changed: not asked again
+    assert db.matchday(14)["close_question_message_id"] is None
+
+    db.signs[14][4] = "1111111111111X"                  # Lara changes her column
+    db.changed[(14, 4)] = datetime(2026, 10, 22, 9, 0, tzinfo=MADRID)
+    tick(datetime(2026, 10, 22, 9, 10, tzinfo=MADRID))
+    second_question = db.matchday(14)["close_question_message_id"]
+    assert second_question and second_question != first_question, "asked again after a change"
+
+    press(333, "yes", message_id=first_question)        # old question: no longer valid
+    tick(datetime(2026, 10, 22, 9, 20, tzinfo=MADRID))
+    assert not db.matchday(14).get("closed_early_at")
+
+    sent_before = tg.sent
+    press(333, "yes")
+    at = datetime(2026, 10, 22, 9, 30, tzinfo=MADRID)
+    tick(at)
+    md = db.matchday(14)
+    assert md["closed_early_at"] == at and md["picks_published"], "closed at once, columns published"
+    assert tg.sent == sent_before + 1 and "Joseba</b> ha cerrado" in tg.edits[-2][2]
+    tick(datetime(2026, 10, 22, 9, 40, tzinfo=MADRID))
+    assert tg.sent == sent_before + 1, "nothing repeated"
+    print("Early close: only the payer can answer, No keeps it open, a change asks again, Yes closes. OK")
+
+
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "simulation_output"
     main(out)
     early_next_matchday(out + "-early-matchday")
     live_scores(out + "-live-scores")
     kickoffs_dropped(out + "-kickoffs-dropped")
+    early_close(out + "-early-close")
