@@ -77,13 +77,15 @@ def parse_datetime(value, time=None) -> datetime | None:
     if value in (None, ""):
         return None
     s = str(value).replace("\\/", "/").strip()
-    if time:
-        s = f"{s[:10]} {str(time).strip()}"
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(s[:19], fmt).replace(tzinfo=MADRID)
-        except ValueError:
-            continue
+    candidates = [s]
+    if time:      # "hora" is not always a time (once a match is played it can hold a status)
+        candidates.insert(0, f"{s[:10]} {str(time).strip()}")
+    for text in candidates:
+        for fmt in _DATE_FORMATS:
+            try:
+                return datetime.strptime(text[:19], fmt).replace(tzinfo=MADRID)
+            except ValueError:
+                continue
     return None
 
 

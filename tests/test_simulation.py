@@ -102,7 +102,11 @@ class FakeSource:
         matches = self._weekend_matches()
         if self.lae_settles_late and not self.lae_settled:
             matches = [{**m, "home_goals": None, "away_goals": None, "sign": None} for m in matches]
+        if self.lae_drops_played_kickoffs:
+            matches = [{**m, "kickoff": None if m["sign"] else m["kickoff"]} for m in matches]
         return matches
+
+    lae_drops_played_kickoffs = False   # real LAE (matchday 16): played matches came without kickoff
 
 
 class NoLiveScores:
@@ -326,8 +330,33 @@ def live_scores(output_dir: str):
                              [{**game, "home": tokens("Sevilla")}])[0]["sign"] is None
 
 
+def kickoffs_dropped(output_dir: str):
+    """Real case, matchday 16: LAE returned Saturday's results without their kickoff times,
+    so Saturday vanished from the daily grouping and its report was never sent."""
+    import bot.teams
+    bot.teams.from_espn = lambda: []
+    db, source = FakeDB(), FakeSource()
+    source.lae_drops_played_kickoffs = True
+    tg = Telegram(dry_run=output_dir)
+    rng = random.Random(7)
+
+    def tick(at: datetime):
+        db.now = at
+        Bot(db, tg, source, now=at, rng=rng, live=NoLiveScores).tick()
+
+    tick(datetime(2026, 10, 20, 11, 0, tzinfo=MADRID))
+    db.signs[14] = {1: "11221X111X11X1", 2: "1X2111X1121X21", 3: "1X1X1X1X1X1X1X",
+                    4: "112X1X1X1X1121", 5: "11211X1X1X1121"}
+    source.played_until = datetime(2026, 10, 25, 0, 30, tzinfo=MADRID)
+    tick(datetime(2026, 10, 25, 0, 30, tzinfo=MADRID))
+    assert all(m["kickoff"] for m in db.fixtures[14]), "stored kickoff times must be kept"
+    assert db.reported_days(14) == {SAT.date()}, "Saturday's report must go out"
+    print("Kickoffs dropped by LAE: kept, Saturday report sent. OK")
+
+
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "simulation_output"
     main(out)
     early_next_matchday(out + "-early-matchday")
     live_scores(out + "-live-scores")
+    kickoffs_dropped(out + "-kickoffs-dropped")

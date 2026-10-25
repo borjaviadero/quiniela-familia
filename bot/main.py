@@ -216,9 +216,14 @@ class Bot:
     def track_results(self, md: dict, picks: dict):
         latest = self.source.results(md["lae_draw_id"], to_date(md.get("draw_date")))
         official = sum(1 for m in latest or [] if m["sign"])
+        stored = [{**m, "kickoff": to_datetime(m["kickoff"]) if m.get("kickoff") else None}
+                  for m in self.db.matches(md["id"])]
         if not latest:      # LAE unreachable: complete what is stored
-            latest = [{**m, "kickoff": to_datetime(m["kickoff"]) if m.get("kickoff") else None}
-                      for m in self.db.matches(md["id"])]
+            latest = stored
+        # Once a match is played LAE may drop its kickoff time; the stored one is kept, as the
+        # daily reports group matches by the day they are played
+        kickoff_of = {m["position"]: m["kickoff"] for m in stored}
+        latest = [{**m, "kickoff": m.get("kickoff") or kickoff_of.get(m["position"])} for m in latest]
         # LAE only publishes results once the draw is settled; live scores fill the gaps
         latest = self.live.fill_results(latest, self.now)
         known = sum(1 for m in latest if m["sign"])
