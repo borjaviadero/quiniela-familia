@@ -26,7 +26,8 @@ Right: the betting web app. Test data.</sub></p>
 
 ## Highlights
 
-- **Fully automated pipeline on a schedule** with GitHub Actions: no servers, no manual steps.
+- **Fully automated pipeline on a schedule** with GitHub Actions, triggered every 10 minutes
+  through the GitHub API (GitHub's own scheduler is kept as a fallback): no servers, no manual steps.
 - **Idempotent design**: every message is flagged in the database once sent, so runs can be
   repeated or overlap safely and nothing is ever duplicated.
 - **Unofficial data source handled defensively**: the lottery has no public API, so the
@@ -34,6 +35,8 @@ Right: the betting web app. Test data.</sub></p>
   a built-in `diagnose` command.
 - **Self-maintaining rules**: the LaLiga team list is pulled from ESPN every season, kickoff
   changes move the betting deadline automatically, and postponed matches are handled.
+- **Two data sources for results**: the lottery only publishes results once the whole draw
+  is settled, so live scores come from ESPN and the official results always take precedence.
 - **Secure by default**: the public website only works with a *family key* that travels in
   the link posted to the private Telegram group (never in the repository), plus a per-player
   PIN hashed with bcrypt and rate-limited; Row Level Security with the site restricted to
@@ -47,8 +50,8 @@ Right: the betting web app. Test data.</sub></p>
  Loterías y Apuestas ─┐                                 ┌─> Telegram group
  (fixtures, results,  ├─> Bot (Python, GitHub Actions) ─┤   (announcements, images,
   prize breakdown)    │          │                      │    reminders, results, prizes)
- ESPN (LaLiga teams) ─┘          ▼                      │
-                          Supabase (PostgreSQL) <───────┴── Web app (GitHub Pages)
+ ESPN (LaLiga teams, ─┘          ▼                      │
+  live scores)            Supabase (PostgreSQL) <───────┴── Web app (GitHub Pages)
                                                              players submit their picks
 ```
 
@@ -59,7 +62,7 @@ Right: the betting web app. Test data.</sub></p>
 | Database | Supabase / PostgreSQL (`supabase/`) | Matchdays, fixtures, picks, reports sent, payments |
 | Messaging | Telegram Bot API | Ticket images, reminders, who pays, prizes |
 | Data | Loterías y Apuestas del Estado (LAE) | Official fixtures, kickoff times, results, prize breakdown |
-| Teams | ESPN public API | Current LaLiga top-flight teams, for the league filter |
+| Teams and live scores | ESPN public API | Current LaLiga top-flight teams (league filter) and final scores as soon as each match ends |
 | Backup | GitHub Actions (`backups/`) | Weekly encrypted database backup |
 
 ## How a matchday works
@@ -72,10 +75,12 @@ Right: the betting web app. Test data.</sub></p>
 4. **When all five are in** (or betting closes) → image with every column, ready to be
    stamped at the lottery shop, and who pays for it.
 5. **After the last match of each day** → image with hits (green), misses (red) and the leader.
+   Results come from ESPN as soon as each match ends; the lottery's official ones replace them
+   when the draw is settled.
 6. **When the matchday ends** → final image, everyone's hits and who pays the next ticket.
 7. **When LAE publishes the prize breakdown** → how much each winning column gets, if any.
 
-The bot runs Tuesday–Thursday every hour and Friday–Monday every 20 minutes.
+The bot runs every 10 minutes (see [Reliable schedule](#6-reliable-schedule)).
 
 ## Game rules
 
@@ -161,9 +166,24 @@ The bot runs Tuesday–Thursday every hour and Friday–Monday every 20 minutes.
 
 ### 5. Check the data sources
 *Actions → Bot → Run workflow → diagnose* prints the ESPN team list, the upcoming
-matchdays with their 15 fixtures (and whether they qualify as LaLiga) and recent prize
-breakdowns. If something comes back empty, LAE changed its website and `bot/lae.py`
+matchdays with their 15 fixtures (whether they qualify as LaLiga, and each result marked
+LAE or ESPN), the number of finished games ESPN reports and recent prize breakdowns. If something comes back empty, LAE changed its website and `bot/lae.py`
 needs adjusting.
+
+### 6. Reliable schedule
+GitHub runs scheduled workflows late when it is busy (hours, in practice), so the bot is
+started every 10 minutes by [cron-job.org](https://cron-job.org) (free) through the GitHub
+API; the workflow's own schedule remains as a fallback.
+1. GitHub → *Settings → Developer settings → Fine-grained tokens* → new token with access to
+   this repository only and the permission **Actions: Read and write** (nothing else).
+2. cron-job.org → *Create cronjob*:
+   - URL: `https://api.github.com/repos/<user>/<repo>/actions/workflows/quiniela.yml/dispatches`
+   - Schedule: every 10 minutes
+   - *Advanced* → method **POST**, headers `Authorization: Bearer <token>`,
+     `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`,
+     body `{"ref":"main","inputs":{"command":"tick"}}`
+   - A successful call answers **204**.
+3. Renew the token before it expires (GitHub emails a reminder).
 
 ## Backups
 
@@ -182,6 +202,8 @@ Then, in the SQL Editor: `select setval('matchdays_id_seq', (select coalesce(max
 ## Maintenance
 
 - **A run fails** (GitHub emails you): *Actions* → the red run → *bot* → *Run*, and read the error.
+- **Runs only every few hours**: the cron-job.org trigger stopped (expired token or failed
+  calls, shown in its history); create a new token and update the header.
 - **The bot stops posting**: if the Telegram group became a *supergroup* its id changed
   (it starts with `-100`); update `TELEGRAM_CHAT_ID`.
 - **Rotate the family key** (e.g. if a link leaks): `select set_family_key();`, update the
@@ -204,6 +226,7 @@ bot/main.py                      Orchestration: one idempotent run (tick) and th
 bot/rules.py                     Game rules: hits, who pays, Pleno, daily reports, league filter, prizes
 bot/lae.py                       Client for the official lottery data (fixtures, results, prizes)
 bot/teams.py                     LaLiga team list from ESPN and fuzzy name matching
+bot/espn.py                      Live scores from ESPN while the lottery has no results yet
 bot/messages.py                  Every user-facing text (Spanish)
 bot/ticket.py                    Renders the ticket images (Pillow)
 bot/db.py                        Supabase (PostgREST) access

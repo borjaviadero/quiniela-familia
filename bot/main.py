@@ -18,7 +18,7 @@ import random
 import sys
 from datetime import datetime, timedelta
 
-from . import lae, messages as msg, teams
+from . import espn, lae, messages as msg, teams
 from .db import DB
 from .rules import (MADRID, MATCH_DURATION, column_prizes, days_pending_report, hits_by_player, is_league_matchday,
                     matchday_complete, pick_pleno_player, pleno_hit, season_of, to_date, to_datetime,
@@ -39,8 +39,8 @@ MIN_BETTING_WINDOW = timedelta(hours=48)      # never wait for the previous matc
 
 class Bot:
     def __init__(self, db: DB, tg: Telegram, source=lae, now: datetime | None = None,
-                 rng: random.Random | None = None):
-        self.db, self.tg, self.source = db, tg, source
+                 rng: random.Random | None = None, live=espn):
+        self.db, self.tg, self.source, self.live = db, tg, source, live
         self.now = now or datetime.now(MADRID)
         self.rng = rng or random.Random()
         self.players = db.players()
@@ -215,7 +215,14 @@ class Bot:
     # ------------------------------------------------------------------
     def track_results(self, md: dict, picks: dict):
         latest = self.source.results(md["lae_draw_id"], to_date(md.get("draw_date")))
-        print(f"Matchday {md['number']}: {sum(1 for m in latest or [] if m['sign'])} of 15 results at LAE")
+        official = sum(1 for m in latest or [] if m["sign"])
+        if not latest:      # LAE unreachable: complete what is stored
+            latest = [{**m, "kickoff": to_datetime(m["kickoff"]) if m.get("kickoff") else None}
+                      for m in self.db.matches(md["id"])]
+        # LAE only publishes results once the draw is settled; live scores fill the gaps
+        latest = self.live.fill_results(latest, self.now)
+        known = sum(1 for m in latest if m["sign"])
+        print(f"Matchday {md['number']}: {official} of 15 results at LAE, {known} with live scores")
         if latest:
             self.db.save_matches(md["id"], latest)
         fixtures = self.db.matches(md["id"])
@@ -305,9 +312,15 @@ def diagnose():
         print(f"First kickoff: {md['first_kickoff']}  ·  official close: {md['official_close']}")
         print(f"Family deadline (24 h before): {md['first_kickoff'] - BETTING_CLOSES_BEFORE}")
         print(f"LaLiga Quiniela?: {'yes' if is_league_matchday(md['matches'], names or None) else 'NO, skipped'}")
-        for m in lae.results(md["draw_id"], md["draw_date"]) or md["matches"]:
-            result = f"{m['home_goals']}-{m['away_goals']} ({m['sign']})" if m["sign"] else ""
+        official = lae.results(md["draw_id"], md["draw_date"]) or md["matches"]
+        with_live = espn.fill_results(official, datetime.now(MADRID))
+        for m, live in zip(official, with_live):
+            result = (f"{m['home_goals']}-{m['away_goals']} ({m['sign']}) LAE" if m["sign"] else
+                      f"{live['home_goals']}-{live['away_goals']} ({live['sign']}) ESPN" if live["sign"] else "")
             print(f"  {m['position']:>2}. {m['kickoff']:%a %d %H:%M}  {m['home']} - {m['away']}  {result}")
+    now = datetime.now(MADRID)
+    games = espn.finished_games(now - timedelta(days=3), now)
+    print(f"\n=== ESPN finished games in the last 3 days (Primera and Segunda): {len(games)} ===")
     print("\n=== Prize breakdown of draws settled in the last 10 days ===")
     today = datetime.now(MADRID).date()
     for d in lae.as_list(lae.settled_raw(today - timedelta(days=10), today)):

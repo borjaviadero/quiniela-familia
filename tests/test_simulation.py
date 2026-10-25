@@ -5,7 +5,8 @@
 Every message and image the bot would send is written to output_dir so it can be
 reviewed. The scenario covers: announcement, 48 h reminder, published picks, a
 daily report, an overlapping midweek matchday, a schedule change, a skipped cup
-matchday, the final result, who pays and the prize message.
+matchday, the final result, who pays and the prize message. Two shorter scenarios cover
+a matchday published early and live scores from ESPN while LAE has no results yet.
 """
 from __future__ import annotations
 
@@ -15,8 +16,10 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from bot import espn
 from bot.main import Bot
 from bot.rules import MADRID, days_pending_report, pick_pleno_player, who_pays
+from bot.teams import tokens
 from bot.telegram import Telegram
 
 FIXTURES = [("Athletic Club", "Valencia"), ("Real Madrid", "Sevilla"), ("Betis", "Barcelona"),
@@ -90,8 +93,41 @@ class FakeSource:
             return self.next_weekend()["matches"]
         return next((m["matches"] for m in self.upcoming_matchdays() if m["draw_id"] == draw_id), None)
 
+    lae_settles_late = False      # real LAE: no results until the whole draw is settled
+    lae_settled = False
+
     def results(self, draw_id, draw_date):
-        return self._weekend_matches() if draw_id == "LAQU-14" else None
+        if draw_id != "LAQU-14":
+            return None
+        matches = self._weekend_matches()
+        if self.lae_settles_late and not self.lae_settled:
+            matches = [{**m, "home_goals": None, "away_goals": None, "sign": None} for m in matches]
+        return matches
+
+
+class NoLiveScores:
+    """Stands in for bot.espn when the scenario relies on LAE only."""
+    @staticmethod
+    def fill_results(matches, now): return matches
+
+
+# How ESPN spells the teams (different from LAE on purpose, to exercise the matching)
+ESPN_NAMES = {"At. Madrid": "Atlético Madrid", "Betis": "Real Betis", "Celta": "Celta Vigo",
+              "Racing": "Racing Santander", "Deportivo": "Deportivo La Coruña", "Sporting": "Sporting Gijón",
+              "Almería": "UD Almería", "Oviedo": "Real Oviedo", "Málaga": "Málaga CF"}
+
+
+class FakeESPN:
+    """Stands in for bot.espn: finished games, spelled the ESPN way, run through the real matching."""
+    def __init__(self, source):
+        self.source = source
+
+    def fill_results(self, matches, now):
+        games = [{"home": tokens(ESPN_NAMES.get(m["home"], m["home"])),
+                  "away": tokens(ESPN_NAMES.get(m["away"], m["away"])),
+                  "kickoff": m["kickoff"], "home_goals": m["home_goals"], "away_goals": m["away_goals"]}
+                 for m in self.source._weekend_matches() if m["sign"]]
+        return espn.fill_results(matches, now, games=games)
 
 
 class FakeDB:
@@ -160,7 +196,7 @@ def main(output_dir: str):
     def tick(at: datetime, label: str):
         before = tg.sent
         db.now = at
-        Bot(db, tg, source, now=at, rng=rng).tick()
+        Bot(db, tg, source, now=at, rng=rng, live=NoLiveScores).tick()
         print(f"{at:%a %d %H:%M}  {label:<44} -> {tg.sent - before} sent")
 
     tick(datetime(2026, 10, 20, 11, 0, tzinfo=MADRID), "matchday 14 published")
@@ -223,7 +259,7 @@ def early_next_matchday(output_dir: str):
 
     def tick(at: datetime):
         db.now = at
-        Bot(db, tg, source, now=at, rng=rng).tick()
+        Bot(db, tg, source, now=at, rng=rng, live=NoLiveScores).tick()
 
     tick(datetime(2026, 10, 20, 11, 0, tzinfo=MADRID))
     db.signs[14] = {1: "11221X111X11X1", 2: "1X2111X1121X21", 3: "1X1X1X1X1X1X1X",
@@ -245,7 +281,53 @@ def early_next_matchday(output_dir: str):
     print("Early matchday 18: waited for 14, Pleno to its winner, payer announced. OK")
 
 
+def live_scores(output_dir: str):
+    """Real case, matchday 16: LAE published no results during the weekend, so Saturday's
+    report was never sent. ESPN's live scores must fill in the gap."""
+    import bot.teams
+    bot.teams.from_espn = lambda: []
+    db, source = FakeDB(), FakeSource()
+    source.lae_settles_late = True
+    tg = Telegram(dry_run=output_dir)
+    rng = random.Random(7)
+
+    def tick(at: datetime):
+        db.now = at
+        Bot(db, tg, source, now=at, rng=rng, live=FakeESPN(source)).tick()
+
+    tick(datetime(2026, 10, 20, 11, 0, tzinfo=MADRID))
+    db.signs[14] = {1: "11221X111X11X1", 2: "1X2111X1121X21", 3: "1X1X1X1X1X1X1X",
+                    4: "112X1X1X1X1121", 5: "11211X1X1X1121"}
+    db.plenos[(14, db.open_matchdays()[0]["pleno_player_id"])] = "2-1"
+    source.played_until = datetime(2026, 10, 25, 0, 30, tzinfo=MADRID)
+    tick(datetime(2026, 10, 25, 0, 30, tzinfo=MADRID))
+    assert db.reported_days(14) == {SAT.date()}, "Saturday's report must go out with ESPN's scores"
+    assert all(m["sign"] for m in db.fixtures[14] if m["position"] <= 7)
+    source.played_until = datetime(2026, 10, 26, 2, 0, tzinfo=MADRID)
+    tick(datetime(2026, 10, 26, 2, 0, tzinfo=MADRID))
+    md14 = next(m for m in db.matchdays if m["id"] == 14)
+    assert md14["finished"] and db.pay[14], "the matchday must close with live scores too"
+    print("Live scores: Saturday report and final result sent before LAE settled. OK")
+
+    # Matching rules: the kickoff and at least one team must agree; women's and reserve teams never match
+    sat = SAT
+    game = {"home": tokens("Atlético Madrid"), "away": tokens("Real Sociedad"), "kickoff": sat,
+            "home_goals": 2, "away_goals": 0}
+    match = {"position": 1, "home": "At. Madrid", "away": "Real Sociedad", "kickoff": sat, "sign": None}
+    assert espn.fill_results([match], sat + timedelta(hours=3), [game])[0]["sign"] == "1"
+    assert espn.fill_results([{**match, "home": "Atl. Madrid"}], sat + timedelta(hours=3), [game])[0]["sign"] == "1"
+    assert espn.fill_results([{**match, "home": "Betis", "away": "Celta"}], sat + timedelta(hours=3),
+                             [game])[0]["sign"] is None
+    assert espn.fill_results([{**match, "kickoff": sat + timedelta(days=1)}], sat + timedelta(days=2),
+                             [game])[0]["sign"] is None
+    assert espn.fill_results([{**match, "home": "At. Madrid (F)", "away": "Real Sociedad (F)"}], sat + timedelta(hours=3),
+                             [game])[0]["sign"] is None
+    assert espn.fill_results([{**match, "home": "Sevilla At.", "away": "Real Sociedad B"}], sat + timedelta(hours=3),
+                             [{**game, "home": tokens("Sevilla")}])[0]["sign"] is None
+
+
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "simulation_output"
     main(out)
     early_next_matchday(out + "-early-matchday")
+    live_scores(out + "-live-scores")

@@ -129,6 +129,7 @@
   .all-picks td.teams { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
   .all-picks td.hit { color: var(--ok); font-weight: 700; }
   .all-picks td.miss { color: var(--red); text-decoration: line-through; }
+  .all-picks tr.pleno-row td { border-top: 1.5px solid var(--red); background: var(--red-soft); white-space: nowrap; }
 
   @media (prefers-reduced-motion: no-preference) {
     .box { transition: background-color .12s, color .12s; }
@@ -403,6 +404,20 @@ function renderAllPicks() {
         return `<td class="${cls}">${s}</td>`;
       }).join("") + `<td>${m.sign ?? ""}</td></tr>`;
   });
+  // Pleno al 15: one per ticket, filled in by the designated player
+  const m15 = d.matches.find(m => m.position === 15);
+  if (m15) {
+    const goals = (g) => g == null ? null : (g >= 3 ? "M" : String(g));
+    const result = m15.home_goals != null && m15.away_goals != null
+      ? `${goals(m15.home_goals)}-${goals(m15.away_goals)}` : null;
+    html += `<tr class="pleno-row"><td>15</td><td class="teams">${m15.home} - ${m15.away}</td>` +
+      d.players.map(p => {
+        if (p.id !== d.matchday.pleno_player_id) return `<td></td>`;
+        const s = byPlayer[p.id]?.pleno ?? "–";
+        const cls = result ? (s === result ? "hit" : "miss") : "";
+        return `<td class="${cls}">${s}</td>`;
+      }).join("") + `<td>${result ?? ""}</td></tr>`;
+  }
   $("all-picks").innerHTML = html;
   $("step-all").hidden = false;
 }

@@ -1,6 +1,9 @@
 name: Bot
 
-# Tuesday-Thursday every hour, Friday-Monday every 20 minutes (times are UTC).
+# Started every 10 minutes by cron-job.org through the GitHub API (workflow_dispatch),
+# because GitHub delays scheduled runs by hours when busy. The schedule below stays as a
+# fallback: Tuesday-Thursday every hour, Friday-Monday every 20 minutes (times are UTC).
+# Runs never overlap (concurrency) and every message is sent once, so extra runs are harmless.
 # Can also be run by hand: Actions > Bot > Run workflow.
 on:
   schedule:
